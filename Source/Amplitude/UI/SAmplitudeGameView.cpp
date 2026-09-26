@@ -188,6 +188,8 @@ void SAmplitudeGameView::Construct(const FArguments& InArgs)
 {
 	Director = InArgs._Director;
 	SetCanTick(true);
+	// Everything animates every frame; never cache this widget's draw elements.
+	ForceVolatile(true);
 }
 
 FVector2D SAmplitudeGameView::ComputeDesiredSize(float LayoutScaleMultiplier) const
