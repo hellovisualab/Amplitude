@@ -1,0 +1,49 @@
+name: Core tests
+
+# Builds and runs the unit tests for the engine-agnostic gameplay core (Source/Amplitude/Core).
+# The Unreal Engine layer needs an engine installation and is not built here.
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-tests:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: gcc
+            cxx: g++
+          - os: ubuntu-latest
+            compiler: clang
+            cxx: clang++
+          - os: windows-latest
+            compiler: msvc
+            cxx: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.cxx }}" ]; then export CXX=${{ matrix.cxx }}; fi
+          cmake -S Tests -B Intermediate/CoreTests -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build Intermediate/CoreTests --config Release
+
+      - name: Test
+        run: ctest --test-dir Intermediate/CoreTests -C Release --output-on-failure
+
+  demo-chart:
+    name: Demo chart is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenerate chart
+        run: python3 Tools/generate_demo_song.py --chart-only
+      - name: Compare with committed chart
+        run: git diff --exit-code Songs/neon_drive/song.json

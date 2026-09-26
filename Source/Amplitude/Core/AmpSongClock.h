@@ -29,6 +29,9 @@ namespace Amp
 		/** Moves the clock to WallSeconds using the rate that was active since the last update. */
 		void Advance(double WallSeconds, double Rate);
 
+		/** Continues from WallSeconds without advancing (used when resuming from pause). */
+		void Rebase(double WallSeconds);
+
 		/** Corrects the clock towards the audio position (already converted to song time). */
 		void Sync(double AudioSongTimeMs);
 

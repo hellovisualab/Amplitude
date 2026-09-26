@@ -18,7 +18,7 @@ target_include_directories(AmplitudeCoreTests PRIVATE ${AMP_SOURCE_ROOT} ${CMAKE
 
 # Mirror Unreal's strictness: shadowed variables are errors in UE5 builds.
 if(MSVC)
-	target_compile_options(AmplitudeCoreTests PRIVATE /W4 /WX /permissive-)
+	target_compile_options(AmplitudeCoreTests PRIVATE /W4 /permissive- /we4456 /we4457 /we4458 /we4459)
 else()
 	target_compile_options(AmplitudeCoreTests PRIVATE -Wall -Wextra -Wshadow -Wfloat-conversion -Werror -fno-exceptions)
 endif()

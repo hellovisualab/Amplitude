@@ -24,6 +24,12 @@ namespace Amp
 		Rate = InRate;
 	}
 
+	void FSongClock::Rebase(double WallSeconds)
+	{
+		LastWallSeconds = WallSeconds;
+		PreviousTimeMs = TimeMs;
+	}
+
 	void FSongClock::Sync(double AudioSongTimeMs)
 	{
 		LastDriftMs = AudioSongTimeMs - TimeMs;
