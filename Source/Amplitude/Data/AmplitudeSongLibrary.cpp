@@ -424,6 +424,10 @@ namespace
 		{
 			Rules.PowerupCollectWindowMs = FMath::Clamp(Value, 50.0, 1000.0);
 		}
+		if (GetNumberField(Object, TEXT("idle_lane_gain"), Value))
+		{
+			Rules.IdleLaneGain = FMath::Clamp(static_cast<float>(Value), 0.0f, 1.0f);
+		}
 		if (const TSharedPtr<FJsonValue>* AutoAdvance = FindField(Object, TEXT("auto_advance_on_capture")))
 		{
 			if ((*AutoAdvance)->Type == EJson::Boolean)

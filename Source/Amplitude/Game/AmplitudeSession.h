@@ -106,6 +106,8 @@ private:
 	double GetTotalOffsetMs() const;
 	void SyncToAudio(double WallSeconds);
 	void HandleEvent(const Amp::FEvent& Event);
+	/** Brings instruments in and out as the player plays and captures lanes (the song builds up). */
+	void UpdateMix(bool bImmediate);
 	void PlaySfx(Amp::ESfx Sfx) const;
 
 	FAmplitudeSessionConfig Config;
@@ -117,6 +119,8 @@ private:
 	TArray<FQueuedInput> PendingInputs;
 	std::vector<Amp::FEvent> EventScratch;
 
+	/** Lane gains last sent to the stem player (-1 = never sent). */
+	float AppliedLaneGains[Amp::NumLanes] = {-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
 	double LastWallSeconds = 0.0;
 	double AppliedRate = 1.0;
 	double InputLatencyMs = 0.0;

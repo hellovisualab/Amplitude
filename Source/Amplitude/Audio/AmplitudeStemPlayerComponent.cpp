@@ -5,7 +5,6 @@
 
 namespace
 {
-	constexpr double MuteCrossfadeMs = 200.0;
 	constexpr double MusicGainRampMs = 50.0;
 }
 
@@ -56,9 +55,9 @@ void UAmplitudeStemPlayerComponent::SetPlaybackRate(double Rate)
 	SynthCommand([this, Rate]() { Mixer.SetRate(Rate); });
 }
 
-void UAmplitudeStemPlayerComponent::SetLaneMuted(int32 Lane, bool bMuted)
+void UAmplitudeStemPlayerComponent::SetLaneGain(int32 Lane, float Gain, double RampMs)
 {
-	SynthCommand([this, Lane, bMuted]() { Mixer.SetLaneGain(Lane, bMuted ? 0.0f : 1.0f, MuteCrossfadeMs); });
+	SynthCommand([this, Lane, Gain, RampMs]() { Mixer.SetLaneGain(Lane, Gain, RampMs); });
 }
 
 void UAmplitudeStemPlayerComponent::SetMusicGain(float LinearGain)

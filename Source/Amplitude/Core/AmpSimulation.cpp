@@ -287,6 +287,20 @@ namespace Amp
 		return std::max(0.0, Lanes[static_cast<size_t>(Lane)].CaptureEndMs - SongTimeMs);
 	}
 
+	float FSimulation::GetLaneMixGain(int32_t Lane) const
+	{
+		if (Lane < 0 || Lane >= NumLanes)
+		{
+			return 0.0f;
+		}
+		const FLaneState& State = Lanes[static_cast<size_t>(Lane)];
+		if (bAutoPlayAll || State.bCaptured || State.bLive)
+		{
+			return 1.0f;
+		}
+		return std::clamp(Rules.IdleLaneGain, 0.0f, 1.0f);
+	}
+
 	int32_t FSimulation::GetShipLaneAt(double InSongTimeMs) const
 	{
 		if (ShipHistory.empty())
@@ -464,13 +478,18 @@ namespace Amp
 		{
 			++Stats.AutoHits;
 		}
-		else if (Judgement == EJudgement::Perfect)
-		{
-			++Stats.Perfect;
-		}
 		else
 		{
-			++Stats.Good;
+			// Hitting a gem brings the instrument in; it keeps playing until a gem of this lane is lost.
+			Lane.bLive = true;
+			if (Judgement == EJudgement::Perfect)
+			{
+				++Stats.Perfect;
+			}
+			else
+			{
+				++Stats.Good;
+			}
 		}
 
 		const bool bPerfect = Judgement == EJudgement::Perfect;
@@ -530,6 +549,7 @@ namespace Amp
 		FLaneState& Lane = Lanes[static_cast<size_t>(Note.Lane)];
 		Lane.Combo = 0;
 		Lane.CaptureStreak = 0;
+		Lane.bLive = false;
 		++Lane.ConsecutiveMisses;
 		++Lane.Misses;
 		++Stats.Miss;
@@ -600,9 +620,10 @@ namespace Amp
 		Note.ResolvedAtMs = AtMs;
 		--PendingNotes;
 
-		// Leaving a lane breaks the run towards its capture, but not its combo.
+		// Leaving a lane breaks the run towards its capture (and its instrument drops out), but not its combo.
 		FLaneState& Lane = Lanes[static_cast<size_t>(Note.Lane)];
 		Lane.CaptureStreak = 0;
+		Lane.bLive = false;
 		++Lane.Skipped;
 		++Stats.Skipped;
 
@@ -766,8 +787,10 @@ namespace Amp
 			FLaneState& Lane = Lanes[static_cast<size_t>(LaneIndex)];
 			if (Lane.bCaptured && NowMs >= Lane.CaptureEndMs)
 			{
+				// The lane falls silent again unless the player picks it back up.
 				Lane.bCaptured = false;
 				Lane.CaptureStreak = 0;
+				Lane.bLive = false;
 				FEvent Event;
 				Event.Type = EEventType::CaptureExpired;
 				Event.Lane = LaneIndex;

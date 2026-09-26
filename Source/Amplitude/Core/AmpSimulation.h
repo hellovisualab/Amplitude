@@ -70,6 +70,8 @@ namespace Amp
 		bool bCaptured = false;
 		double CaptureEndMs = 0.0;
 		int32_t ConsecutiveMisses = 0;
+		/** The player's last judged gem in this lane was a hit, so the instrument is being played live. */
+		bool bLive = false;
 		bool bMuted = false;
 		int32_t MuteCount = 0;
 		int32_t Hits = 0;
@@ -213,6 +215,8 @@ namespace Amp
 		double GetGlobalMultiplier() const;
 		double GetLaneComboMultiplier(int32_t Lane) const;
 		double GetCaptureRemainingMs(int32_t Lane) const;
+		/** How loud the lane's instrument should be right now (0-1): the song builds up as lanes are played and captured. */
+		float GetLaneMixGain(int32_t Lane) const;
 		/** Pending notes of a lane between two song times (used by the HUD mini-map and lane choices). */
 		int32_t CountPendingNotes(int32_t Lane, double FromMs, double ToMs) const;
 

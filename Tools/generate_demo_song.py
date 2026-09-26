@@ -52,9 +52,9 @@ OUTRO = range(26, 28)
 
 LEFT, MIDDLE, RIGHT = 1, 2, 4  # column bits
 
-# Chart tuning for the demo: a capture needs a full two-bar phrase and lasts four bars, so the
-# player keeps hopping between tracks the way the song builds up.
-RULES = {"capture_streak": 8, "capture_duration_ms": round(4 * BAR * 1000.0)}
+# Chart tuning for the demo: a capture needs a full two-bar phrase (8 gems). Captured tracks then
+# play by themselves for the default 30 s, so the song builds up as the player hops between them.
+RULES = {"capture_streak": 8}
 
 
 def midi_to_hz(note):

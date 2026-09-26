@@ -45,6 +45,8 @@ namespace
 	constexpr int32 NumSparkSlots = FirstPowerupSlot + Amp::NumPowerupTypes;
 
 	constexpr int32 NumFloaters = 56;
+	constexpr int32 NumStars = 420;
+	constexpr double StarDistance = 300000.0;
 	constexpr int32 NumFloaterKinds = 4;
 	constexpr double FloaterNear = -9000.0;
 	constexpr double FloaterFar = 42000.0;
@@ -79,14 +81,17 @@ namespace
 		return Palette;
 	}
 
-	/** Bright, poster-like skies: daybreak, golden hour, twilight and lagoon. */
+	/**
+	 * Dark looks, one per song section: midnight blue, plum, deep teal and ember. Only the gems, lane
+	 * edges and effects carry bright colour; everything else stays close to black.
+	 */
 	const FAmplitudeStagePalette& GetPalette(int32 Index)
 	{
 		static const FAmplitudeStagePalette Palettes[] = {
-			MakePalette(TEXT("2B59C3"), TEXT("6FA8F5"), TEXT("FFD9B3"), TEXT("E8B89A"), TEXT("F5F7FB"), TEXT("FFF1C1"), TEXT("FFE3D1"), TEXT("FF7A6B"), TEXT("7FD8BE"), TEXT("FFC857")),
-			MakePalette(TEXT("4B3FA8"), TEXT("E0708A"), TEXT("FFC370"), TEXT("D98E6A"), TEXT("FFF7EE"), TEXT("FFE7A3"), TEXT("FFD1A1"), TEXT("FF9F43"), TEXT("FF6B8B"), TEXT("7B6CF6")),
-			MakePalette(TEXT("141E4F"), TEXT("3C4DA6"), TEXT("E98AB8"), TEXT("5A4A8C"), TEXT("EEF0FA"), TEXT("FFD6E8"), TEXT("C9D2FF"), TEXT("5EEAD4"), TEXT("A78BFA"), TEXT("F9A8D4")),
-			MakePalette(TEXT("0B6E8A"), TEXT("3CC6E0"), TEXT("FFF0B8"), TEXT("9ED9CF"), TEXT("F2FBF9"), TEXT("FFFBE0"), TEXT("E6FFFA"), TEXT("FF8A4C"), TEXT("FFD23F"), TEXT("3DDC97")),
+			MakePalette(TEXT("030409"), TEXT("080B16"), TEXT("121829"), TEXT("040509"), TEXT("171B26"), TEXT("9FB2FF"), TEXT("27304D"), TEXT("1C2336"), TEXT("241F3A"), TEXT("17283B")),
+			MakePalette(TEXT("050308"), TEXT("0F0A18"), TEXT("21152E"), TEXT("060408"), TEXT("1A1522"), TEXT("E0B8FF"), TEXT("35284D"), TEXT("2A1F3D"), TEXT("35202F"), TEXT("1D2135")),
+			MakePalette(TEXT("020506"), TEXT("051116"), TEXT("0B212B"), TEXT("030607"), TEXT("121B20"), TEXT("A8F0FF"), TEXT("1C3743"), TEXT("142C33"), TEXT("182636"), TEXT("20303A")),
+			MakePalette(TEXT("060304"), TEXT("130909"), TEXT("26120F"), TEXT("070405"), TEXT("1C1516"), TEXT("FFC4A8"), TEXT("412721"), TEXT("34201D"), TEXT("2A1B21"), TEXT("3A2A20")),
 		};
 		constexpr int32 Count = UE_ARRAY_COUNT(Palettes);
 		return Palettes[((Index % Count) + Count) % Count];
@@ -196,14 +201,14 @@ AAmplitudeStage::AAmplitudeStage()
 	SunLight->SetupAttachment(SceneRoot);
 	SunLight->SetMobility(EComponentMobility::Movable);
 	SunLight->SetRelativeRotation(FRotator(-42.0f, 25.0f, 0.0f));
-	SunLight->SetIntensity(3.2f);
+	SunLight->SetIntensity(2.2f);
 	SunLight->SetCastShadows(true);
 
 	FillLight = CreateDefaultSubobject<UDirectionalLightComponent>(TEXT("Fill"));
 	FillLight->SetupAttachment(SceneRoot);
 	FillLight->SetMobility(EComponentMobility::Movable);
 	FillLight->SetRelativeRotation(FRotator(-14.0f, 205.0f, 0.0f));
-	FillLight->SetIntensity(1.1f);
+	FillLight->SetIntensity(0.6f);
 	FillLight->SetCastShadows(false);
 
 	SkyLight = CreateDefaultSubobject<USkyLightComponent>(TEXT("SkyLight"));
@@ -212,12 +217,12 @@ AAmplitudeStage::AAmplitudeStage()
 	SkyLight->SourceType = ESkyLightSourceType::SLS_CapturedScene;
 	// Only the dome and the sun count as sky; the track and scenery are closer than this.
 	SkyLight->SkyDistanceThreshold = 150000.0f;
-	SkyLight->SetIntensity(0.8f);
+	SkyLight->SetIntensity(0.35f);
 
 	Fog = CreateDefaultSubobject<UExponentialHeightFogComponent>(TEXT("Fog"));
 	Fog->SetupAttachment(SceneRoot);
 	Fog->SetRelativeLocation(FVector(0.0, 0.0, -1500.0));
-	Fog->SetFogDensity(0.035f);
+	Fog->SetFogDensity(0.04f);
 	Fog->SetFogHeightFalloff(0.12f);
 	Fog->SetStartDistance(1800.0f);
 	Fog->SetFogMaxOpacity(0.92f);
@@ -273,8 +278,8 @@ void AAmplitudeStage::BuildScene()
 	// Track: 0 lane surfaces, 1 glowing lane edges, 2 beat lines, 3 hit line.
 	TrackMesh = NewPart<UProceduralMeshComponent>(this, SceneRoot, TEXT("Track"));
 	TrackMesh->SetCastShadow(false);
-	TrackSurfaceMaterial = AmplitudeMaterials::Create(EKind::Lit, this, FLinearColor::White, 0.12f, 0.3f);
-	TrackGlowMaterial = AmplitudeMaterials::Create(EKind::Unlit, this, FLinearColor::White, 1.8f);
+	TrackSurfaceMaterial = AmplitudeMaterials::Create(EKind::Lit, this, FLinearColor::White, 0.1f, 0.22f);
+	TrackGlowMaterial = AmplitudeMaterials::Create(EKind::Unlit, this, FLinearColor::White, 2.2f);
 	TrackMesh->SetMaterial(0, TrackSurfaceMaterial);
 	TrackMesh->SetMaterial(1, TrackGlowMaterial);
 	TrackMesh->SetMaterial(2, TrackSurfaceMaterial);
@@ -292,21 +297,34 @@ void AAmplitudeStage::BuildScene()
 
 	SunDisc = NewPart<UStaticMeshComponent>(this, SceneRoot, TEXT("SunDisc"));
 	SunDisc->SetStaticMesh(Sphere);
-	SunMaterial = AmplitudeMaterials::Create(EKind::Unlit, this, Palette.Sun, 2.4f);
+	// A small pale moon low over the track.
+	SunMaterial = AmplitudeMaterials::Create(EKind::Unlit, this, Palette.Sun, 1.3f);
 	SunDisc->SetMaterial(0, SunMaterial);
 	SunDisc->SetCastShadow(false);
-	SunDisc->SetWorldLocation(FVector(300000.0, -70000.0, 26000.0));
-	SunDisc->SetWorldScale3D(FVector(260.0));
+	SunDisc->SetWorldLocation(FVector(300000.0, -70000.0, 34000.0));
+	SunDisc->SetWorldScale3D(FVector(110.0));
+
+	StarInstances = AddInstanced(TEXT("Stars"), Sphere, AmplitudeMaterials::Create(EKind::Additive, this, FLinearColor(0.85f, 0.9f, 1.0f), 2.5f), false);
+	TArray<FTransform> Stars;
+	for (int32 Index = 0; Index < NumStars; ++Index)
+	{
+		// Scattered over the upper sky, a little denser near the horizon.
+		const double Elevation = FMath::Asin(FMath::Pow(Random.FRand(), 1.6f) * 0.98 + 0.02);
+		const double Azimuth = Random.FRandRange(0.0f, 6.2832f);
+		const FVector Direction(FMath::Cos(Elevation) * FMath::Cos(Azimuth), FMath::Cos(Elevation) * FMath::Sin(Azimuth), FMath::Sin(Elevation));
+		Stars.Add(FTransform(FQuat::Identity, Direction * StarDistance, FVector(Random.FRandRange(4.0f, 11.0f))));
+	}
+	SetInstances(StarInstances, Stars);
 
 	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
 	{
-		GemMaterials.Add(AmplitudeMaterials::Create(EKind::Lit, this, LaneColors[Lane], 0.45f, 0.18f));
+		GemMaterials.Add(AmplitudeMaterials::Create(EKind::Lit, this, LaneColors[Lane], 0.9f, 0.15f));
 		GemInstances.Add(AddInstanced(FString::Printf(TEXT("Gems%d"), Lane), Sphere, GemMaterials[Lane], true));
 
 		TargetMaterials.Add(AmplitudeMaterials::Create(EKind::Lit, this, LaneColors[Lane], 0.25f, 0.3f));
 		TargetInstances.Add(AddInstanced(FString::Printf(TEXT("Targets%d"), Lane), Cylinder, TargetMaterials[Lane], false));
 	}
-	FadedGemInstances = AddInstanced(TEXT("FadedGems"), Sphere, AmplitudeMaterials::Create(EKind::Lit, this, FLinearColor(0.35f, 0.36f, 0.4f), 0.0f, 0.6f), false);
+	FadedGemInstances = AddInstanced(TEXT("FadedGems"), Sphere, AmplitudeMaterials::Create(EKind::Lit, this, FLinearColor(0.12f, 0.12f, 0.15f), 0.0f, 0.6f), false);
 
 	for (int32 Type = 0; Type < Amp::NumPowerupTypes; ++Type)
 	{
@@ -339,7 +357,7 @@ void AAmplitudeStage::BuildScene()
 
 	for (int32 Kind = 0; Kind < NumFloaterKinds; ++Kind)
 	{
-		FloaterMaterials.Add(AmplitudeMaterials::Create(EKind::Lit, this, Palette.Shapes[Kind % 3], 0.06f, 0.55f));
+		FloaterMaterials.Add(AmplitudeMaterials::Create(EKind::Lit, this, Palette.Shapes[Kind % 3], 0.05f, 0.45f));
 		FloaterInstances.Add(AddInstanced(FString::Printf(TEXT("Floaters%d"), Kind), Kind == NumFloaterKinds - 1 ? Cube : Sphere, FloaterMaterials[Kind], false));
 	}
 
@@ -355,8 +373,8 @@ void AAmplitudeStage::BuildShip()
 
 	ShipRoot = NewPart<USceneComponent>(this, SceneRoot, TEXT("Ship"));
 
-	UMaterialInstanceDynamic* Hull = AmplitudeMaterials::Create(EKind::Lit, this, Hex(TEXT("F7F8FC")), 0.05f, 0.18f);
-	UMaterialInstanceDynamic* Glass = AmplitudeMaterials::Create(EKind::Lit, this, Hex(TEXT("1D2540")), 0.0f, 0.08f);
+	UMaterialInstanceDynamic* Hull = AmplitudeMaterials::Create(EKind::Lit, this, Hex(TEXT("2A2F3D")), 0.02f, 0.2f);
+	UMaterialInstanceDynamic* Glass = AmplitudeMaterials::Create(EKind::Lit, this, Hex(TEXT("0B0E16")), 0.0f, 0.06f);
 	ShipAccentMaterial = AmplitudeMaterials::Create(EKind::Lit, this, LaneColors[AttractShipLane], 1.2f, 0.25f);
 	ShipGlowMaterial = AmplitudeMaterials::Create(EKind::Additive, this, LaneColors[AttractShipLane], 1.0f);
 	BeamMaterial = AmplitudeMaterials::Create(EKind::Additive, this, LaneColors[AttractShipLane], 3.0f);
@@ -517,6 +535,17 @@ void AAmplitudeStage::UpdateTiming(float DeltaSeconds)
 
 	const double Beats = (SongTimeMs - FirstBeatMs) / BeatMs;
 	BeatPulse = static_cast<float>(FMath::Exp(-(Beats - FMath::FloorToDouble(Beats)) * 5.0));
+
+	float Audible = 1.0f;
+	if (Session != nullptr)
+	{
+		Audible = 0.0f;
+		for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
+		{
+			Audible += Session->GetSimulation().GetLaneMixGain(Lane) / Amp::NumLanes;
+		}
+	}
+	MusicLevel = FMath::Lerp(MusicLevel, Audible, 1.0f - FMath::Exp(-DeltaSeconds * 4.0f));
 	if (!bHasSession)
 	{
 		AttractShipLane = static_cast<int32>(HashInts(FMath::FloorToInt64(Beats / 8.0), 17) % Amp::NumLanes);
@@ -546,10 +575,12 @@ void AAmplitudeStage::UpdatePalette(float DeltaSeconds)
 	SunLight->SetLightColor(FMath::Lerp(FLinearColor::White, Palette.Sun, 0.6f));
 	FillLight->SetLightColor(FMath::Lerp(FLinearColor::White, Palette.SkyMid, 0.7f));
 	SunMaterial->SetVectorParameterValue(ColorParam, Palette.Sun);
-	HoopMaterial->SetScalarParameterValue(GlowParam, 0.35f + 0.5f * BeatPulse);
+	// The world lights up with the music: the more instruments are playing, the stronger the pulse.
+	HoopMaterial->SetScalarParameterValue(GlowParam, 0.5f + 1.6f * BeatPulse * MusicLevel);
 	for (int32 Kind = 0; Kind < FloaterMaterials.Num(); ++Kind)
 	{
 		FloaterMaterials[Kind]->SetVectorParameterValue(ColorParam, Palette.Shapes[Kind % 3]);
+		FloaterMaterials[Kind]->SetScalarParameterValue(GlowParam, 0.05f + 0.6f * BeatPulse * MusicLevel);
 	}
 
 	if (VisualSeconds >= NextSkyCaptureSeconds)
@@ -659,8 +690,10 @@ void AAmplitudeStage::UpdateTrackMesh()
 		const bool bShipLane = Lane == ShipLane;
 		const bool bCaptured = Simulation != nullptr && Simulation->GetLane(Lane).bCaptured;
 		const bool bMuted = Simulation != nullptr && Simulation->GetLane(Lane).bMuted;
+		// Lanes whose instrument is playing (live or captured) light up; the rest stay dark.
+		const bool bAudible = Simulation == nullptr || Simulation->GetLaneMixGain(Lane) > 0.5f;
 		const FLinearColor LaneColor = LaneColors[Lane];
-		FLinearColor Tint = FMath::Lerp(Palette.Track, LaneColor, (bShipLane ? 0.42f : 0.18f) + 0.25f * LaneFlash[Lane]);
+		FLinearColor Tint = FMath::Lerp(Palette.Track, LaneColor, (bShipLane ? 0.22f : 0.08f) + (bAudible ? 0.08f : 0.0f) + 0.2f * LaneFlash[Lane]);
 		if (bMuted)
 		{
 			Tint = FMath::Lerp(Tint, Muted, 0.6f);
@@ -671,7 +704,7 @@ void AAmplitudeStage::UpdateTrackMesh()
 		const double Center = LaneCenter(Lane);
 		const double Across[3] = {Center - LaneWidth * 0.5, Center, Center + LaneWidth * 0.5};
 		const double EdgeWidth = bShipLane ? 6.0 : 3.5;
-		const FLinearColor EdgeColor = bShipLane ? LaneColor : FMath::Lerp(LaneColor, FLinearColor::White, 0.55f) * 0.55f;
+		const FLinearColor EdgeColor = (bShipLane || bAudible) ? LaneColor : LaneColor * 0.3f;
 
 		// Surface (3 samples across so the half-pipe curve shows) and the two glowing edges.
 		const int32 SurfaceStart = TrackSurface.Vertices.Num();
@@ -686,7 +719,7 @@ void AAmplitudeStage::UpdateTrackMesh()
 			{
 				// A captured lane plays itself: colour flows down it.
 				const float Flow = 0.5f + 0.5f * FMath::Sin(static_cast<float>(Distance * 0.006 - VisualSeconds * 9.0));
-				RowColor = FMath::Lerp(Palette.Track, LaneColor, 0.6f + 0.25f * Flow + 0.15f * CaptureFlash[Lane]);
+				RowColor = FMath::Lerp(Palette.Track, LaneColor, 0.3f + 0.2f * Flow + 0.2f * CaptureFlash[Lane]);
 			}
 			RowColor = FMath::Lerp(RowColor, Palette.Horizon, Far);
 
@@ -725,7 +758,7 @@ void AAmplitudeStage::UpdateTrackMesh()
 		}
 
 		// Hit line across the lane.
-		const FLinearColor HitColor = bShipLane ? FMath::Lerp(LaneColor, FLinearColor::White, 0.4f) : FLinearColor(0.75f, 0.75f, 0.78f);
+		const FLinearColor HitColor = bShipLane ? FMath::Lerp(LaneColor, FLinearColor::White, 0.35f) : FLinearColor(0.22f, 0.23f, 0.28f);
 		const int32 HitStart = TrackHitLine.Vertices.Num();
 		for (const double Distance : {-7.0, 7.0})
 		{
@@ -758,7 +791,7 @@ void AAmplitudeStage::UpdateTrackMesh()
 		{
 			const double Center = LaneCenter(Lane);
 			const double Across[3] = {Center - LaneWidth * 0.5 + 6.0, Center, Center + LaneWidth * 0.5 - 6.0};
-			const FLinearColor Color = FMath::Lerp(FMath::Lerp(LaneTints[Lane], FLinearColor::White, bBar ? 0.75f : 0.45f), Palette.Horizon, Far);
+			const FLinearColor Color = FMath::Lerp(FMath::Lerp(LaneTints[Lane], FLinearColor::White, bBar ? 0.22f : 0.1f), Palette.Horizon, Far);
 			const int32 Start = TrackBeats.Vertices.Num();
 			for (const double Offset : {-HalfThickness, HalfThickness})
 			{
@@ -804,7 +837,7 @@ void AAmplitudeStage::UpdateHoops()
 		// Hoops flare as they pass the hit line (the downbeat).
 		const float Flash = FMath::Clamp(1.0f - static_cast<float>(FMath::Abs(Distance + 150.0) / 450.0), 0.0f, 1.0f);
 		const float Far = FMath::SmoothStep(0.6f, 1.05f, static_cast<float>(Distance / TrackLength));
-		const FLinearColor Color = FMath::Lerp(FMath::Lerp(Palette.Hoop, FLinearColor::White, 0.6f * Flash), Palette.Horizon, Far);
+		const FLinearColor Color = FMath::Lerp(FMath::Lerp(Palette.Hoop, LaneColors[GetDisplayedShipLane()], 0.8f * Flash), Palette.Horizon, Far);
 
 		const int32 Start = Hoops.Vertices.Num();
 		for (int32 Major = 0; Major <= MajorSegments; ++Major)
@@ -984,7 +1017,7 @@ void AAmplitudeStage::UpdateTargets(float DeltaSeconds)
 			Transforms.Add(MakeTrackTransform(0.0, LaneCenter(Lane) + ColumnOffset(Column), 2.5, FVector(Scale, Scale, 0.035)));
 		}
 		SetInstances(TargetInstances[Lane], Transforms);
-		TargetMaterials[Lane]->SetScalarParameterValue(GlowParam, (bShipLane ? 0.9f + 0.3f * BeatPulse : 0.18f) + 1.5f * Brightest);
+		TargetMaterials[Lane]->SetScalarParameterValue(GlowParam, (bShipLane ? 1.2f + 0.4f * BeatPulse : 0.2f) + 1.8f * Brightest);
 
 		LaneFlash[Lane] = FMath::Max(0.0f, LaneFlash[Lane] - DeltaSeconds * 4.0f);
 		MissFlash[Lane] = FMath::Max(0.0f, MissFlash[Lane] - DeltaSeconds * 3.0f);
@@ -1034,7 +1067,7 @@ void AAmplitudeStage::UpdateFloaters(float DeltaSeconds)
 			RespawnFloater(Floater, false);
 		}
 		const FVector Location = Floater.Position + FVector(0.0, 0.0, 90.0 * FMath::Sin(VisualSeconds * 0.6 + Floater.Phase));
-		const double Scale = Floater.Radius / 50.0 * (1.0 + 0.07 * BeatPulse);
+		const double Scale = Floater.Radius / 50.0 * (1.0 + 0.08 * BeatPulse * MusicLevel);
 		PerKind[Floater.Kind].Add(FTransform(Floater.Rotation, Location, FVector(Scale)));
 	}
 	for (int32 Kind = 0; Kind < NumFloaterKinds; ++Kind)
@@ -1081,9 +1114,9 @@ void AAmplitudeStage::UpdatePostProcess()
 	Settings.bOverride_AutoExposureBias = true;
 	Settings.AutoExposureBias = CVarStageExposure.GetValueOnGameThread();
 	Settings.bOverride_BloomIntensity = true;
-	Settings.BloomIntensity = 0.75f;
+	Settings.BloomIntensity = 0.9f;
 	Settings.bOverride_VignetteIntensity = true;
-	Settings.VignetteIntensity = 0.32f;
+	Settings.VignetteIntensity = 0.45f;
 	Settings.bOverride_MotionBlurAmount = true;
 	Settings.MotionBlurAmount = 0.0f;
 	Settings.bOverride_LensFlareIntensity = true;

@@ -42,8 +42,8 @@ public:
 	void Unload();
 	void SetPlaying(bool bPlaying);
 	void SetPlaybackRate(double Rate);
-	/** Mutes or restores one instrument with a 200 ms crossfade (spec 10.3.2). */
-	void SetLaneMuted(int32 Lane, bool bMuted);
+	/** Fades one instrument to Gain (0-1) over RampMs (mutes, and the song building up as lanes are played). */
+	void SetLaneGain(int32 Lane, float Gain, double RampMs);
 	void SetMusicGain(float LinearGain);
 	/** Debug: only the given lane is audible; INDEX_NONE restores the full mix. */
 	void SetSoloLane(int32 Lane);

@@ -454,7 +454,9 @@ int32 SAmplitudeGameView::PaintLaneStrip(const FGeometry& Geometry, FSlateWindow
 		const FVector2D Position(Left + Lane * (PillWidth + Gap), Top - (bShip ? 6.0f * Scale : 0.0f));
 		const FVector2D PillSize(PillWidth, PillHeight);
 
-		FLinearColor Fill = WithAlpha(FMath::Lerp(Ink, LaneColor, 0.35f), 0.78f);
+		// Lanes whose instrument is being heard light up; the song builds up as they are played and captured.
+		const bool bAudible = Simulation.GetLaneMixGain(Lane) > 0.5f;
+		FLinearColor Fill = WithAlpha(FMath::Lerp(Ink, LaneColor, bAudible ? 0.42f : 0.14f), 0.85f);
 		if (State.bCaptured)
 		{
 			Fill = WithAlpha(LaneColor, 0.92f);
@@ -469,6 +471,10 @@ int32 SAmplitudeGameView::PaintLaneStrip(const FGeometry& Geometry, FSlateWindow
 			DrawBox(Out, Layer + 1, Geometry, Position, PillSize, FLinearColor::White, OutlineBrush());
 			DrawBox(Out, Layer + 1, Geometry, Position + FVector2D(PillWidth * 0.5f - 14.0f * Scale, -10.0f * Scale), FVector2D(28.0f * Scale, 4.0f * Scale), FLinearColor::White, PillBrush());
 		}
+
+		const FVector2D DotSize(8.0f * Scale, 8.0f * Scale);
+		const FLinearColor DotColor = State.bCaptured ? Ink : (bAudible ? LaneColor : FLinearColor(1.0f, 1.0f, 1.0f, 0.15f));
+		DrawBox(Out, Layer + 1, Geometry, Position + FVector2D(PillWidth - 16.0f * Scale, 8.0f * Scale), DotSize, DotColor, PillBrush());
 
 		const FLinearColor TextColor = State.bCaptured ? Ink : AmplitudeStyle::Text;
 		PaintText(Out, Layer + 2, Geometry, AmplitudeStyle::GetLaneLabel(Lane).ToString(), AmplitudeStyle::Font(14.0f * Scale),

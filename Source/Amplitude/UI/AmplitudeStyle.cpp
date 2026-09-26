@@ -13,11 +13,12 @@ namespace AmplitudeStyle
 		return FLinearColor(FColor::FromHex(HexCode));
 	}
 
-	const FLinearColor Background(FColor(12, 14, 30));
-	const FLinearColor Panel(FColor(16, 20, 44, 215));
-	const FLinearColor PanelOutline(FColor(255, 255, 255, 60));
-	const FLinearColor Text(FColor(246, 247, 252));
-	const FLinearColor TextDim(FColor(168, 174, 200));
+	// Dark mode throughout: near-black surfaces, soft white text, colour only where it means something.
+	const FLinearColor Background(FColor(8, 9, 13));
+	const FLinearColor Panel(FColor(14, 16, 22, 238));
+	const FLinearColor PanelOutline(FColor(255, 255, 255, 28));
+	const FLinearColor Text(FColor(236, 238, 244));
+	const FLinearColor TextDim(FColor(128, 134, 150));
 	const FLinearColor Accent(FColor(255, 138, 101));
 	const FLinearColor Perfect(FColor(255, 205, 60));
 	const FLinearColor Good(FColor(190, 225, 255));

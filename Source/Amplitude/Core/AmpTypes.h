@@ -147,6 +147,13 @@ namespace Amp
 		/** After capturing the lane it is in, the Beat Blaster jumps to the next lane with music coming. */
 		bool bAutoAdvanceOnCapture = true;
 
+		/**
+		 * The song builds up as it is played: an instrument is heard while its lane is captured or
+		 * while the player keeps hitting its gems (until a miss or a skipped gem). Every other lane
+		 * plays at this volume (0 = silent).
+		 */
+		float IdleLaneGain = 0.0f;
+
 		double Score2xDurationMs = 15000.0;
 		double SlowMotionDurationMs = 10000.0;
 		double SlowMotionRate = 0.5;

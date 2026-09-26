@@ -58,8 +58,7 @@
   }
  },
  "rules": {
-  "capture_streak": 8,
-  "capture_duration_ms": 7385
+  "capture_streak": 8
  },
  "notes": [
   {

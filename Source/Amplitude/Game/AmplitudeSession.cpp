@@ -13,6 +13,9 @@ namespace
 	constexpr double MaxSnapshotAgeSeconds = 0.25;
 	/** Frame hitches are clamped so powerup timers do not jump. */
 	constexpr double MaxRealDeltaMs = 250.0;
+	/** An instrument comes in almost instantly on a hit and fades out a little more gently. */
+	constexpr double LaneFadeInMs = 20.0;
+	constexpr double LaneFadeOutMs = 150.0;
 }
 
 FAmplitudeSession::FAmplitudeSession(const FAmplitudeSessionConfig& InConfig, UAmplitudeStemPlayerComponent* InStemPlayer, UAmplitudeSfxComponent* InSfxPlayer)
@@ -53,8 +56,33 @@ void FAmplitudeSession::Start(double WallSeconds)
 	{
 		// Song time = audio time - offset, so the play head starts at lead-in + offset.
 		Player->LoadSong(Config.Audio, -Config.LeadInMs + GetTotalOffsetMs());
+		for (float& Gain : AppliedLaneGains)
+		{
+			Gain = -1.0f;
+		}
+		UpdateMix(true);
 		Player->SetPlaying(true);
 		SerialAtResume = Player->GetAudioPosition().Serial;
+	}
+}
+
+void FAmplitudeSession::UpdateMix(bool bImmediate)
+{
+	UAmplitudeStemPlayerComponent* Player = StemPlayer.Get();
+	if (Player == nullptr)
+	{
+		return;
+	}
+	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
+	{
+		const float Gain = Simulation.GetLaneMixGain(Lane);
+		if (Gain == AppliedLaneGains[Lane])
+		{
+			continue;
+		}
+		const double RampMs = bImmediate ? 0.0 : (Gain > AppliedLaneGains[Lane] ? LaneFadeInMs : LaneFadeOutMs);
+		AppliedLaneGains[Lane] = Gain;
+		Player->SetLaneGain(Lane, Gain, RampMs);
 	}
 }
 
@@ -112,6 +140,8 @@ void FAmplitudeSession::Tick(double WallSeconds)
 			Player->SetPlaybackRate(Rate);
 		}
 	}
+
+	UpdateMix(false);
 
 	EventScratch.clear();
 	Simulation.DrainEvents(EventScratch);
@@ -232,7 +262,7 @@ void FAmplitudeSession::PlaySfx(Amp::ESfx Sfx) const
 
 void FAmplitudeSession::HandleEvent(const Amp::FEvent& Event)
 {
-	UAmplitudeStemPlayerComponent* Player = StemPlayer.Get();
+	// Instruments are faded in and out by UpdateMix; events only trigger sound effects here.
 	switch (Event.Type)
 	{
 	case Amp::EEventType::NoteHit:
@@ -247,18 +277,6 @@ void FAmplitudeSession::HandleEvent(const Amp::FEvent& Event)
 		break;
 	case Amp::EEventType::LaneCaptured:
 		PlaySfx(Amp::ESfx::Capture);
-		break;
-	case Amp::EEventType::LaneMuted:
-		if (Player != nullptr)
-		{
-			Player->SetLaneMuted(Event.Lane, true);
-		}
-		break;
-	case Amp::EEventType::LaneUnmuted:
-		if (Player != nullptr)
-		{
-			Player->SetLaneMuted(Event.Lane, false);
-		}
 		break;
 	case Amp::EEventType::PowerupCollected:
 		PlaySfx(Amp::ESfx::Powerup);

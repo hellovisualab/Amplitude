@@ -226,6 +226,59 @@ AMP_TEST(LaneOccupiedAtNoteTimeDecidesMissOrSkip)
 	EXPECT_EQ(Pass.Sim.GetEnergy(), 50);
 }
 
+AMP_TEST(MusicBuildsUpLaneByLane)
+{
+	std::vector<FNote> Notes = LaneNotes(2, 1000.0, 500.0, 8);
+	std::vector<FNote> Other = LaneNotes(4, 1000.0, 500.0, 8);
+	Notes.insert(Notes.end(), Other.begin(), Other.end());
+	FHarness H(Notes);
+	for (int32_t Lane = 0; Lane < NumLanes; ++Lane)
+	{
+		EXPECT_NEAR(H.Sim.GetLaneMixGain(Lane), 0.0, 1e-9); // nothing plays until it is played
+	}
+
+	H.Press(Middle, 1000.0);
+	EXPECT_NEAR(H.Sim.GetLaneMixGain(2), 1.0, 1e-9); // a hit brings the instrument in
+	EXPECT_NEAR(H.Sim.GetLaneMixGain(4), 0.0, 1e-9);
+	H.AdvanceTo(1400.0);
+	EXPECT_NEAR(H.Sim.GetLaneMixGain(2), 1.0, 1e-9); // and it keeps playing between gems
+
+	H.AdvanceTo(1900.0); // the 1500 gem is missed
+	EXPECT_NEAR(H.Sim.GetLaneMixGain(2), 0.0, 1e-9);
+	EXPECT_FALSE(H.Sim.GetLane(2).bLive);
+
+	H.Press(Middle, 2000.0);
+	EXPECT_NEAR(H.Sim.GetLaneMixGain(2), 1.0, 1e-9);
+	H.Move(3, 2200.0); // leaving: the next gem is skipped and the instrument drops out
+	H.AdvanceTo(2900.0);
+	EXPECT_NEAR(H.Sim.GetLaneMixGain(2), 0.0, 1e-9);
+
+	// A captured lane plays by itself, then falls silent when the capture ends.
+	FGameRules Rules;
+	Rules.CaptureDurationMs = 3000.0;
+	Rules.bAutoAdvanceOnCapture = false;
+	FHarness Capture(LaneNotes(2, 1000.0, 500.0, 6), EDifficulty::Normal, 20000.0, Rules);
+	for (int32_t Index = 0; Index < 4; ++Index)
+	{
+		Capture.Press(Middle, 1000.0 + 500.0 * Index);
+	}
+	EXPECT_TRUE(Capture.Sim.GetLane(2).bCaptured);
+	Capture.Move(0, 2600.0);
+	Capture.AdvanceTo(5000.0);
+	EXPECT_NEAR(Capture.Sim.GetLaneMixGain(2), 1.0, 1e-9);
+	Capture.AdvanceTo(5600.0);
+	EXPECT_FALSE(Capture.Sim.GetLane(2).bCaptured);
+	EXPECT_NEAR(Capture.Sim.GetLaneMixGain(2), 0.0, 1e-9);
+
+	// Songs can keep a quiet bed of the other instruments; auto-play hears everything.
+	FGameRules Quiet;
+	Quiet.IdleLaneGain = 0.2f;
+	FHarness Bed({MakeNote(0, 60000.0)}, EDifficulty::Normal, 0.0, Quiet);
+	EXPECT_NEAR(Bed.Sim.GetLaneMixGain(5), 0.2, 1e-6);
+	Bed.Sim.SetAutoPlayAll(true);
+	EXPECT_NEAR(Bed.Sim.GetLaneMixGain(5), 1.0, 1e-9);
+}
+
 AMP_TEST(EarlyPressMissesAndGhostPressIsFree)
 {
 	FHarness H({MakeNote(1, 1000.0)});

@@ -5,14 +5,17 @@ implementing the *Amplitude: Rhythm-Action Game – Complete UE5 Implementation 
 
 The player flies the **Beat Blaster** down a winding 3D track of six instrument lanes (Drums, Synth,
 Bass, Vocals, Pad, FX), steering between lanes and firing its three gem buttons in time with a
-multitrack song, like the original *Amplitude*: capture a lane and it plays itself while you move on
-to the next one. Energy, per-lane combos, lane capture, muting and six powerups complete the rules.
+multitrack song, like the original *Amplitude*. The song **builds up as you play it**: at the start
+nothing is heard; an instrument comes in while you hit its gems and drops out when you miss or leave
+its lane, and a captured lane keeps playing by itself while you move on to the next one. Energy,
+per-lane combos, lane capture, muting and six powerups complete the rules.
 
 The whole game is code: the 3D stage is built from engine shapes and procedural meshes, the HUD and
 menus are Slate, sound effects are synthesised in real time, and songs are loaded at runtime from
 JSON + WAV. The project has **no binary content assets** and runs on the engine's built-in `Entry` map.
-The look is bright and modern: poster-like sky gradients that change with each section of the song,
-glossy gems, soft fog and floating shapes that pulse with the beat.
+The look is dark and modern throughout: near-black skies with stars and a pale moon that shift tone
+with each section of the song, glowing gems and lane edges, soft fog, and scenery that pulses harder
+the more of the song is playing. Menus and HUD use the same dark style.
 
 ---
 
@@ -137,7 +140,8 @@ folder name is the song's ID for leaderboards. Everything in spec §14.1 and §2
   },
   "rules": { "capture_streak": 4, "capture_duration_ms": 30000, "capture_energy_cost": 5,
              "mute_miss_streak": 4, "starting_energy": 50,
-             "auto_advance_on_capture": true, "powerup_collect_window_ms": 250 },  // optional, defaults per spec
+             "auto_advance_on_capture": true, "powerup_collect_window_ms": 250,
+             "idle_lane_gain": 0.0 },         // optional, defaults per spec
   "notes": [                            // base chart, authored at Normal density
     { "id": 1, "time_ms": 1000, "lane": 1, "column": 2 },
     { "id": 2, "time_ms": 2000, "lane": "bass", "column": "left" },
@@ -159,6 +163,9 @@ folder name is the song's ID for leaderboards. Everything in spec §14.1 and §2
   * Brutal (150%) and Insane (200%) subdivide gaps between notes of the same lane (never closer than
     150 ms, and silent stretches longer than 1.2 s stay silent). Added gems walk across the columns.
   * Insane also turns 1 in 8 single notes into two-button chords.
+* **Stems.** Because the song builds up instrument by instrument, every lane needs its own audio: one
+  channel of a multichannel WAV per instrument, or one stem file per instrument (`"stems"`). A song
+  whose instruments are all mixed into one stereo file would play all or nothing.
 * **Audio.** At runtime the game decodes **WAV only** (PCM 8/16/24/32-bit or float), which gives
   sample-accurate per-instrument mixing and muting. Convert OGG/MP3 multitracks to a multichannel WAV,
   for example `ffmpeg -i song.ogg -c:a pcm_s16le audio.wav`, or provide per-instrument stems. The
@@ -177,10 +184,11 @@ cmake --build Intermediate/CoreTests
 ctest --test-dir Intermediate/CoreTests --output-on-failure
 ```
 
-The 55 tests cover most of the rule-level items in spec §19:
+The 56 tests cover most of the rule-level items in spec §19:
 
 * timing windows for every difficulty
 * steering between lanes, the lane history, and misses versus free skips in other lanes
+* the music build-up: which instruments are heard as lanes are played, missed, skipped and captured
 * Perfect/Good/Miss, wrong buttons, auto-miss, early-press misses and chords
 * energy gain/loss, the energy cap and game over
 * per-lane combos and multiplier tiers for all four difficulties
@@ -222,12 +230,13 @@ The specification is ambiguous or self-contradictory in places. These are the de
 | Topic | Decision |
 |---|---|
 | Controls | As in the original *Amplitude* (not the spec's six lane keys): left/right steer the Beat Blaster between lanes, three buttons fire at the left/middle/right gem columns of its lane. Charts carry a column per gem. |
+| Music build-up | Like the original game, an instrument is only heard while its lane is captured or while the player keeps hitting its gems; a miss or a skipped gem drops it out (20 ms fade in, 150 ms fade out). `idle_lane_gain` lets a song keep a quiet bed of the other instruments (default 0, silent). The spec's "mute after 4 misses" is kept as a lane status. |
 | Other lanes | Only the lane the ship is in when a gem reaches the hit line counts. Gems of other lanes are *skipped*: no score, no energy loss, no combo break, but they do reset that lane's capture streak. A gem that already passed can still be hit if you arrive within its Good window. |
 | Inputs outside the window (§19.3) | A wrong button while a gem of your lane is inside the Good window loses that gem. A press up to 100 ms before the Good window misses the next gem of that column. Anything else is a free *ghost press*. |
 | Which note a press hits | The pending gem of that column closest to the press inside the Good window. |
 | Energy | Table §15 and the §14.1 JSON are used: Good = +1 on every difficulty, Miss = −1/−3/−4/−4. §7.1.1 says +2 for a Mellow Good, which conflicts. |
 | Combo tiers | Table §15 thresholds. The multiplier uses the combo *after* the hit (the 5th hit on Normal scores 1.2x). |
-| Capture | 4 consecutive **player** hits capture the lane for 30 s of song time, and the Beat Blaster then jumps to the nearest free lane with music coming (`auto_advance_on_capture`). The demo song uses a full two-bar phrase (8 hits) and a four-bar capture, closer to the original game. Auto-played notes are Perfects: they score, give energy and keep the combo, but do not build a new streak. A capture needs *more* energy than its cost (5), so it can never end the run; the streak keeps counting until the capture is affordable. Songs can tune all of this via `rules`. |
+| Capture | 4 consecutive **player** hits capture the lane for 30 s of song time, and the Beat Blaster then jumps to the nearest free lane with music coming (`auto_advance_on_capture`). The demo song uses a full two-bar phrase (8 hits) to capture, closer to the original game. Auto-played notes are Perfects: they score, give energy and keep the combo, but do not build a new streak. A capture needs *more* energy than its cost (5), so it can never end the run; the streak keeps counting until the capture is affordable. Songs can tune all of this via `rules`. |
 | Score 2x | Each pickup is an independent 15 s timer, and overlapping pickups stack multiplicatively (2x, 4x, ...). This satisfies both "extend duration" and "2x × 2x = 4x". |
 | Fever | Starts at 1.5x and gains +0.1x per hit (player or auto), capped at 3.0x. Any miss breaks it. It multiplies with Score 2x. |
 | Shield | Absorbs the energy loss of the next miss. The miss still breaks the combo and counts towards muting. |

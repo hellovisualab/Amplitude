@@ -20,7 +20,7 @@ class USkyLightComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 
-/** One look of the environment; the stage blends from one to the next as the song moves through its sections. */
+/** One (dark) look of the environment; the stage blends from one to the next as the song moves through its sections. */
 struct FAmplitudeStagePalette
 {
 	FLinearColor SkyTop;
@@ -28,6 +28,7 @@ struct FAmplitudeStagePalette
 	FLinearColor Horizon;
 	FLinearColor Ground;
 	FLinearColor Track;
+	/** The moon disc. */
 	FLinearColor Sun;
 	FLinearColor Hoop;
 	FLinearColor Shapes[3];
@@ -178,6 +179,9 @@ private:
 	TObjectPtr<UStaticMeshComponent> SunDisc;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UInstancedStaticMeshComponent> StarInstances;
+
+	UPROPERTY(Transient)
 	TArray<TObjectPtr<UInstancedStaticMeshComponent>> GemInstances;
 
 	UPROPERTY(Transient)
@@ -252,6 +256,8 @@ private:
 	double AttractTimeMs = 0.0;
 	double VisualSeconds = 0.0;
 	float BeatPulse = 0.0f;
+	/** Share of the instruments currently heard (0-1, smoothed); 1 in the menus. */
+	float MusicLevel = 1.0f;
 	bool bHasSession = false;
 
 	// Track shape
