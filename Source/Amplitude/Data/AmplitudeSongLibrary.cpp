@@ -3,6 +3,7 @@
 #include "Algo/Sort.h"
 #include "Amplitude.h"
 #include "Core/AmpChart.h"
+#include "Core/AmpMp3.h"
 #include "Core/AmpRules.h"
 #include "Core/AmpWav.h"
 #include "Dom/JsonObject.h"
@@ -473,6 +474,11 @@ namespace
 	{
 		return FPaths::GetExtension(Path).Equals(TEXT("wav"), ESearchCase::IgnoreCase);
 	}
+
+	bool IsMp3Path(const FString& Path)
+	{
+		return FPaths::GetExtension(Path).Equals(TEXT("mp3"), ESearchCase::IgnoreCase);
+	}
 }
 
 bool FAmplitudeSongDefinition::HasAudioConfigured() const
@@ -871,9 +877,9 @@ FAmplitudeAudioLoadResult FAmplitudeSongLibrary::LoadAudio(const FAmplitudeSongD
 		{
 			continue;
 		}
-		if (!IsWavPath(Path))
+		if (!IsWavPath(Path) && !IsMp3Path(Path))
 		{
-			Result.Warnings.Add(FString::Printf(TEXT("%s: unsupported format (WAV only)"), *Path));
+			Result.Warnings.Add(FString::Printf(TEXT("%s: unsupported format (stems must be WAV or MP3)"), *Path));
 			continue;
 		}
 		TArray<uint8> Bytes;
@@ -885,7 +891,10 @@ FAmplitudeAudioLoadResult FAmplitudeSongLibrary::LoadAudio(const FAmplitudeSongD
 		Amp::FWavInfo Info;
 		Amp::FPcmTrack Track;
 		std::string Error;
-		if (!Amp::DecodeWavStem(Bytes.GetData(), static_cast<size_t>(Bytes.Num()), Info, Track, Error))
+		const bool bDecoded = IsMp3Path(Path)
+			? Amp::DecodeMp3Stem(Bytes.GetData(), static_cast<size_t>(Bytes.Num()), Info, Track, Error)
+			: Amp::DecodeWavStem(Bytes.GetData(), static_cast<size_t>(Bytes.Num()), Info, Track, Error);
+		if (!bDecoded)
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("%s: %s"), *Path, *ToFString(Error)));
 			continue;

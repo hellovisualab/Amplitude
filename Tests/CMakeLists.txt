@@ -15,6 +15,7 @@ file(GLOB AMP_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 add_executable(AmplitudeCoreTests ${AMP_CORE_SOURCES} ${AMP_TEST_SOURCES})
 target_include_directories(AmplitudeCoreTests PRIVATE ${AMP_SOURCE_ROOT} ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(AmplitudeCoreTests PRIVATE AMP_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Data")
 
 # Mirror Unreal's strictness: shadowed variables are errors in UE5 builds.
 if(MSVC)

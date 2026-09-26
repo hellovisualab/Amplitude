@@ -7,6 +7,9 @@ public class Amplitude : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 		CppStandard = CppStandardVersion.Cpp20;
+		// Every file is its own translation unit: helpers in anonymous namespaces and the bundled
+		// minimp3 decoder's macros cannot collide across files.
+		bUseUnity = false;
 
 		// Sources include each other relative to the module root, e.g. "Core/AmpSimulation.h".
 		PublicIncludePaths.Add(ModuleDirectory);

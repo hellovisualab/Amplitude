@@ -6,11 +6,14 @@ a finished stereo mix has to be split into instrument stems first. This script d
 
   1. Separation. Either an AI model (Demucs, by Meta) splits the song into drums, bass, vocals,
      guitar, piano and "other", or you give it the stems you already have (your own multitracks, or
-     the output of a separation app such as Ultimate Vocal Remover).
+     the output of a separation app such as Ultimate Vocal Remover). Without Demucs installed, a
+     simpler built-in splitter is used: percussive vs. tonal sound, then frequency bands and stereo
+     position (drums, cymbals/air, bass, centred voice/lead, wide low-mid, wide high-mid). It is
+     rougher than the AI, but every part is still musical and together they rebuild the full mix.
   2. Chart. It finds the tempo and the notes of every instrument (onset detection), snaps them to
      the beat, spreads them over the three gem columns from low to high pitch, and thins them to a
      playable density.
-  3. Install. It writes Songs/<id>/ with one WAV per instrument and song.json, ready to play.
+  3. Install. It writes Songs/<id>/ with one MP3 (or WAV) per instrument and song.json, ready to play.
 
 Usage (on Windows you can also drag a song, or a folder of stems, onto Tools/ImportSong.bat):
     python Tools/import_song.py "C:/Music/My Song.mp3"
@@ -22,7 +25,7 @@ piano, keys, pad, strings, fx, other...). Several files for one lane (kick.wav +
 
 Requirements (Python 3.9+):
     pip install numpy imageio-ffmpeg          # always (imageio-ffmpeg brings its own ffmpeg)
-    pip install demucs                        # only to separate a finished mix (installs PyTorch)
+    pip install demucs                        # optional, much better separation (installs PyTorch)
 With an NVIDIA card, installing the CUDA build of PyTorch first (see pytorch.org) makes separation
 several times faster; on a CPU expect a few minutes per song.
 """
@@ -30,6 +33,7 @@ several times faster; on a CPU expect a few minutes per song.
 import argparse
 import bisect
 import datetime
+import importlib.util
 import json
 import os
 import re
@@ -109,6 +113,16 @@ def load_audio(path, ffmpeg):
     return samples.reshape(-1, 2).T.copy()
 
 
+def write_mp3(path, audio, ffmpeg):
+    """(2, frames) float -> high quality VBR MP3 (the LAME header keeps stems sample-aligned in game)."""
+    command = [ffmpeg, "-v", "error", "-y", "-f", "f32le", "-ac", str(audio.shape[0]), "-ar", str(SAMPLE_RATE), "-i", "-",
+               "-c:a", "libmp3lame", "-q:a", "2", path]
+    data = np.clip(audio, -1.0, 1.0).T.astype("<f4").tobytes()
+    result = subprocess.run(command, input=data, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        sys.exit(f"Could not write {path}:\n{result.stderr.decode(errors='replace')}")
+
+
 def write_wav(path, audio):
     """(channels, frames) float -> 16-bit PCM WAV."""
     clipped = np.clip(audio, -1.0, 1.0)
@@ -153,6 +167,116 @@ def separate_with_demucs(mix, model_name, device):
         lane = mapping.get(name)
         if lane:
             stems[lane] = stems.get(lane, 0) + sources[index]
+    return stems
+
+
+# ---- Built-in splitter (no AI) -------------------------------------------------------------------
+
+DSP_FFT = 4096
+DSP_HOP = DSP_FFT // 4
+
+
+def stft(signal):
+    window = np.hanning(DSP_FFT + 1)[:-1].astype(np.float32)
+    padded = np.pad(signal, (DSP_FFT // 2, DSP_FFT))
+    frames = (len(signal) + DSP_FFT // 2) // DSP_HOP + 1
+    spectrum = np.empty((frames, DSP_FFT // 2 + 1), dtype=np.complex64)
+    for start in range(0, frames, 1024):
+        rows = np.arange(start, min(frames, start + 1024))
+        block = padded[rows[:, None] * DSP_HOP + np.arange(DSP_FFT)[None, :]] * window
+        spectrum[rows] = np.fft.rfft(block, axis=1)
+    return spectrum
+
+
+def istft(spectrum, length):
+    window = np.hanning(DSP_FFT + 1)[:-1].astype(np.float32)
+    frames = spectrum.shape[0]
+    out = np.zeros(frames * DSP_HOP + 2 * DSP_FFT, dtype=np.float32)
+    norm = np.zeros_like(out)
+    overlaps = DSP_FFT // DSP_HOP
+    for offset in range(overlaps):
+        # Frames offset, offset + 4, offset + 8... sit end to end, so each set adds in one slice.
+        rows = spectrum[offset::overlaps]
+        blocks = np.fft.irfft(rows, n=DSP_FFT, axis=1).astype(np.float32) * window
+        begin = offset * DSP_HOP
+        out[begin:begin + blocks.size] += blocks.reshape(-1)
+        norm[begin:begin + blocks.size] += np.tile(window * window, len(rows))
+    out = out / np.maximum(norm, 1e-6)
+    return out[DSP_FFT // 2:DSP_FFT // 2 + length]
+
+
+def median_filter(values, width, axis):
+    half = width // 2
+    pad = [(0, 0), (0, 0)]
+    pad[axis] = (half, half)
+    padded = np.pad(values, pad, mode="edge")
+    out = np.empty_like(values)
+    other = 1 - axis
+    for start in range(0, values.shape[other], 256):
+        stop = min(values.shape[other], start + 256)
+        part = padded[:, start:stop] if other == 1 else padded[start:stop, :]
+        view = np.lib.stride_tricks.sliding_window_view(part, width, axis=axis)
+        if other == 1:
+            out[:, start:stop] = np.median(view, axis=-1)
+        else:
+            out[start:stop, :] = np.median(view, axis=-1)
+    return out
+
+
+def crossover(frequencies, low, high):
+    """0 below low, 1 above high, a smooth log-frequency ramp between."""
+    position = (np.log2(np.maximum(frequencies, 1.0)) - np.log2(low)) / (np.log2(high) - np.log2(low))
+    ramp = np.clip(position, 0.0, 1.0)
+    return (ramp * ramp * (3.0 - 2.0 * ramp)).astype(np.float32)
+
+
+def separate_with_dsp(mix):
+    log("Separating instruments with the built-in splitter (install Demucs for a cleaner AI separation)...")
+    length = mix.shape[1]
+    left, right = stft(mix[0]), stft(mix[1])
+    magnitude = 0.5 * (np.abs(left) + np.abs(right))
+    frequencies = np.fft.rfftfreq(DSP_FFT, 1.0 / SAMPLE_RATE).astype(np.float32)
+
+    # Percussive vs tonal: tonal energy is steady over time, percussive energy is spread over frequency.
+    tonal = median_filter(magnitude, 17, axis=0) ** 2
+    percussive = median_filter(magnitude, 17, axis=1) ** 2
+    tonal_share = tonal / (tonal + percussive + 1e-12)
+    del tonal, percussive, magnitude
+
+    # How centred each bin is in the stereo image (1 = identical in both speakers).
+    mid = np.abs(left + right) ** 2
+    side = np.abs(left - right) ** 2
+    centred = (mid / (mid + side + 1e-12)) ** 2
+    # A narrow or mono mix has no stereo to go by: fall back to splitting the tonal part by register.
+    width = float(np.clip((side.sum() / (mid.sum() + 1e-12)) / 0.08, 0.0, 1.0))
+    del mid, side
+
+    bass_band = 1.0 - crossover(frequencies, 150.0, 260.0)
+    cymbals = crossover(frequencies, 3000.0, 6000.0)
+    air = crossover(frequencies, 7000.0, 11000.0)
+    upper = crossover(frequencies, 900.0, 1800.0)
+
+    hits = 1.0 - tonal_share
+    body = tonal_share * (1.0 - air)
+    rest = body * (1.0 - bass_band)
+    voice_band = crossover(frequencies, 400.0, 700.0) * (1.0 - crossover(frequencies, 2000.0, 3500.0))
+    chord_band = 1.0 - crossover(frequencies, 400.0, 700.0)
+    lead_band = crossover(frequencies, 2000.0, 3500.0)
+    vocals = width * centred + (1.0 - width) * voice_band
+    pad = width * (1.0 - centred) * (1.0 - upper) + (1.0 - width) * chord_band
+    synth = width * (1.0 - centred) * upper + (1.0 - width) * lead_band
+    masks = {
+        "drums": hits * (1.0 - cymbals),
+        "fx": hits * cymbals + tonal_share * air,
+        "bass": body * bass_band,
+        "vocals": rest * vocals,
+        "pad": rest * pad,
+        "synth": rest * synth,
+    }
+    # The masks add up to one everywhere, so the six parts together give back the original mix.
+    stems = {}
+    for lane, mask in masks.items():
+        stems[lane] = np.stack([istft(left * mask, length), istft(right * mask, length)])
     return stems
 
 
@@ -446,7 +570,10 @@ def main():
     parser.add_argument("--id", help="folder name under Songs/ (default: from the title)")
     parser.add_argument("--bpm", type=float, help="tempo, if you know it (detected otherwise)")
     parser.add_argument("--offset-ms", type=float, default=0.0, help="per-song audio offset (+ if the audio is heard late)")
+    parser.add_argument("--separator", default="auto", choices=["auto", "demucs", "dsp"],
+                        help="auto: Demucs if installed, otherwise the built-in splitter")
     parser.add_argument("--model", default="htdemucs_6s", help="Demucs model: htdemucs_6s (6 instruments) or htdemucs (4)")
+    parser.add_argument("--format", default="mp3", choices=["mp3", "wav"], help="audio format of the stems written for the game")
     parser.add_argument("--device", default="auto", help="auto, cpu or cuda")
     parser.add_argument("--no-snap", action="store_true", help="keep note times exactly as detected")
     parser.add_argument("--out", default=os.path.join(root, "Songs"), help="songs folder")
@@ -468,7 +595,11 @@ def main():
         stems = load_stem_folder(args.stems, ffmpeg)
     else:
         log(f"Reading {args.song}")
-        stems = separate_with_demucs(load_audio(args.song, ffmpeg), args.model, args.device)
+        mix_in = load_audio(args.song, ffmpeg)
+        separator = args.separator
+        if separator == "auto":
+            separator = "demucs" if importlib.util.find_spec("demucs") else "dsp"
+        stems = separate_with_demucs(mix_in, args.model, args.device) if separator == "demucs" else separate_with_dsp(mix_in)
 
     length = max(audio.shape[1] for audio in stems.values())
     mix = np.zeros((2, length), dtype=np.float32)
@@ -497,8 +628,11 @@ def main():
         if analysis.loud_db < -55.0:
             log(f"  {lane}: silent, skipped")
             continue
-        file_name = f"{lane}.wav"
-        write_wav(os.path.join(folder, file_name), stems[lane] * gain)
+        file_name = f"{lane}.{args.format}"
+        if args.format == "mp3":
+            write_mp3(os.path.join(folder, file_name), stems[lane] * gain, ffmpeg)
+        else:
+            write_wav(os.path.join(folder, file_name), stems[lane] * gain)
         written[lane] = file_name
         lane_notes = build_lane_notes(analysis, bpm, first_bar_s, not args.no_snap)
         log(f"  {lane}: {len(lane_notes)} notes")
@@ -511,8 +645,8 @@ def main():
     # The game counts bars from the first marker, so the markers start on the earliest downbeat.
     beat_ms = 60000.0 / bpm
     bar_ms = beat_ms * 4.0
-    first_ms = max(0.0, first_bar_s * 1000.0) if first_bar_s > -0.06 else first_bar_s * 1000.0
-    first_ms -= np.floor(first_ms / bar_ms) * bar_ms
+    first_ms = first_bar_s * 1000.0
+    first_ms -= np.floor(first_ms / bar_ms + 1e-6) * bar_ms
     beat_markers = []
     while first_ms + len(beat_markers) * beat_ms < duration_ms:
         beat_markers.append({"time_ms": round(first_ms + len(beat_markers) * beat_ms, 1), "beat": len(beat_markers)})

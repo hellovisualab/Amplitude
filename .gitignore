@@ -25,6 +25,7 @@ compile_commands.json
 /Songs/neon_drive/audio.wav
 # Imported songs: their audio stays local (large, and not ours to publish).
 /Songs/**/*.wav
+/Songs/**/*.mp3
 
 # Python
 __pycache__/

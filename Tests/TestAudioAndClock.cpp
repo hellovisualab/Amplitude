@@ -1,11 +1,14 @@
 #include "TestFramework.h"
 
+#include "Core/AmpMp3.h"
 #include "Core/AmpSfxSynth.h"
 #include "Core/AmpSongClock.h"
 #include "Core/AmpStemMixer.h"
 #include "Core/AmpWav.h"
 
 #include <cstring>
+#include <fstream>
+#include <iterator>
 
 using namespace Amp;
 
@@ -293,4 +296,35 @@ AMP_TEST(SfxSynthIsBoundedAndFinishes)
 	EXPECT_NEAR(FSfxSynth::GetDurationSeconds(ESfx::Perfect), 0.15, 1e-9);
 	EXPECT_NEAR(FSfxSynth::GetDurationSeconds(ESfx::Miss), 0.2, 1e-9);
 	EXPECT_NEAR(FSfxSynth::GetDurationSeconds(ESfx::SongComplete), 1.0, 1e-9);
+}
+
+AMP_TEST(Mp3StemDecodesGapless)
+{
+	// Tests/Data/click.mp3: 1 s of 44.1 kHz stereo silence with a 2 ms tone burst at 0.5 s, LAME-encoded.
+	std::ifstream File(AMP_TEST_DATA_DIR "/click.mp3", std::ios::binary);
+	EXPECT_TRUE(File.good());
+	const std::vector<uint8_t> Bytes((std::istreambuf_iterator<char>(File)), std::istreambuf_iterator<char>());
+
+	FWavInfo Info;
+	FPcmTrack Track;
+	std::string Error;
+	EXPECT_TRUE(DecodeMp3Stem(Bytes.data(), Bytes.size(), Info, Track, Error));
+	EXPECT_EQ(Info.SampleRate, 44100);
+	EXPECT_EQ(Track.NumChannels, 2);
+	// Encoder delay and padding are removed: the length and the burst's position match the source.
+	EXPECT_TRUE(std::abs(Track.GetNumFrames() - 44100) <= 2);
+	int64_t FirstLoud = -1;
+	for (int64_t Frame = 0; Frame < Track.GetNumFrames(); ++Frame)
+	{
+		if (std::abs(static_cast<int>(Track.Samples[static_cast<size_t>(Frame * 2)])) > 8000)
+		{
+			FirstLoud = Frame;
+			break;
+		}
+	}
+	EXPECT_TRUE(FirstLoud >= 22050 - 10 && FirstLoud <= 22050 + 30);
+
+	FPcmTrack Garbage;
+	const uint8_t Junk[64] = {};
+	EXPECT_FALSE(DecodeMp3Stem(Junk, sizeof(Junk), Info, Garbage, Error));
 }

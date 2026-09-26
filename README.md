@@ -122,7 +122,10 @@ playable one in a single step:
 
 1. **Separation.** An AI model ([Demucs](https://github.com/facebookresearch/demucs), by Meta) splits
    the finished mix into drums, bass, vocals, guitar, piano and other, which become the Drums, Bass,
-   Vocals, Synth, Pad and FX lanes. If you already have stems (your own multitracks, or the output of
+   Vocals, Synth, Pad and FX lanes. Without Demucs, a built-in splitter is used instead: percussive vs.
+   tonal sound (median filtering), then frequency bands and stereo position give drums, cymbals/air,
+   bass, a centred voice/lead part and two wide tonal parts. It is rougher than the AI, but every part
+   is musical and the six add back up to the original mix exactly. If you already have stems (your own multitracks, or the output of
    an app such as Ultimate Vocal Remover), give it the folder instead; files are matched to lanes by
    name (`kick`, `snare`, `bass`, `vox`, `guitar`, `keys`, `pad`, `fx`...) and several files for one
    lane are mixed together.
@@ -130,7 +133,7 @@ playable one in a single step:
    like pads and strings), snaps them to the beat, spreads them over the three gem columns from low to
    high pitch, and thins them to a playable density. Harder and easier difficulties are derived by the
    game as usual.
-3. **Install.** It writes `Songs/<id>/` with one WAV per instrument and `song.json`.
+3. **Install.** It writes `Songs/<id>/` with one MP3 per instrument (`--format wav` for WAV) and `song.json`.
 
 **On Windows**, install [Python 3](https://www.python.org/downloads/) (tick *Add python.exe to
 PATH*), then drag a song file, or a folder of stems, onto `Tools/ImportSong.bat`. The first run installs
@@ -147,7 +150,8 @@ python Tools/import_song.py --stems "My Song stems/" --title "My Song"      # st
 ```
 
 Options: `--bpm` if the detected tempo is wrong, `--offset-ms` for the song's audio offset,
-`--model htdemucs` for the 4-instrument model, `--no-snap` to keep raw note times. Then start (or
+`--separator dsp` to force the built-in splitter, `--model htdemucs` for the 4-instrument Demucs
+model, `--no-snap` to keep raw note times. Then start (or
 restart) the game; `amp.AutoPlay 1` in the console plays every lane so you can check the chart.
 Imported audio is ignored by git. Only import songs you have the rights to use.
 
@@ -202,9 +206,10 @@ folder name is the song's ID for leaderboards. Everything in spec §14.1 and §2
 * **Stems.** Because the song builds up instrument by instrument, every lane needs its own audio: one
   channel of a multichannel WAV per instrument, or one stem file per instrument (`"stems"`). A song
   whose instruments are all mixed into one stereo file would play all or nothing.
-* **Audio.** At runtime the game decodes **WAV only** (PCM 8/16/24/32-bit or float), which gives
-  sample-accurate per-instrument mixing and muting. Convert OGG/MP3 multitracks to a multichannel WAV,
-  for example `ffmpeg -i song.ogg -c:a pcm_s16le audio.wav`, or provide per-instrument stems. The
+* **Audio.** At runtime the game decodes **WAV** (PCM 8/16/24/32-bit or float, multichannel or stems)
+  and **MP3 stems** (bundled [minimp3](https://github.com/lieff/minimp3), CC0; the LAME header's encoder
+  delay is removed so stems stay sample-aligned). Mixing and muting are sample-accurate per instrument.
+  Other formats: convert them, for example `ffmpeg -i song.ogg -c:a pcm_s16le audio.wav`. The
   master/click channel is loaded for reference but never played: the stems already make up the mix.
 * Songs in extra folders are picked up when they are listed in `AdditionalSongDirectories`
   (GameUserSettings.ini).
@@ -220,7 +225,7 @@ cmake --build Intermediate/CoreTests
 ctest --test-dir Intermediate/CoreTests --output-on-failure
 ```
 
-The 56 tests cover most of the rule-level items in spec §19:
+The 57 tests cover most of the rule-level items in spec §19:
 
 * timing windows for every difficulty
 * steering between lanes, the lane history, and misses versus free skips in other lanes
@@ -235,7 +240,7 @@ The 56 tests cover most of the rule-level items in spec §19:
 * scoring, the completion bonus and the end-of-song summary
 * column parsing helpers, per-lane chart density scaling and chord expansion
 * clock slewing and resync
-* WAV decoding for every format
+* WAV decoding for every format, and gapless MP3 stem decoding
 * mixer crossfades, rate, lead-in and solo
 * SFX bounds
 
@@ -290,7 +295,7 @@ The specification is ambiguous or self-contradictory in places. These are the de
 
 ## Known limitations
 
-* Runtime audio decoding is WAV only (see above). Imported `USoundWave` assets are not used, so songs stay drop-in files.
+* Runtime audio decoding is WAV and MP3 stems only (see above). Imported `USoundWave` assets are not used, so songs stay drop-in files.
 * There is no chart editor and no replays (out of MVP scope, §23). All input is timestamped, so replays could be added.
 * Leaderboards are local only.
 * The stage materials are generated in the editor; packaged builds need `amp.SaveMaterials` first (see *Testing*).
