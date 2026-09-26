@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/AmpSfxSynth.h"
 #include "Core/AmpSimulation.h"
 #include "Core/AmpSongClock.h"
 #include "Core/AmpStemMixer.h"
