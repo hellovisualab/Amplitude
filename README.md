@@ -115,6 +115,42 @@ If the drift exceeds 50 ms, the clock snaps to the audio position (spec §10.2 a
 gem presses are timestamped when Slate receives the key, not when Enhanced Input fires later in the
 frame. This removes most of a frame of judging latency.
 
+## Your own songs
+
+The game does not split songs itself at runtime, but `Tools/import_song.py` turns any song into a
+playable one in a single step:
+
+1. **Separation.** An AI model ([Demucs](https://github.com/facebookresearch/demucs), by Meta) splits
+   the finished mix into drums, bass, vocals, guitar, piano and other, which become the Drums, Bass,
+   Vocals, Synth, Pad and FX lanes. If you already have stems (your own multitracks, or the output of
+   an app such as Ultimate Vocal Remover), give it the folder instead; files are matched to lanes by
+   name (`kick`, `snare`, `bass`, `vox`, `guitar`, `keys`, `pad`, `fx`...) and several files for one
+   lane are mixed together.
+2. **Chart.** It finds the tempo, the attacks of every instrument (and the chord changes of held ones
+   like pads and strings), snaps them to the beat, spreads them over the three gem columns from low to
+   high pitch, and thins them to a playable density. Harder and easier difficulties are derived by the
+   game as usual.
+3. **Install.** It writes `Songs/<id>/` with one WAV per instrument and `song.json`.
+
+**On Windows**, install [Python 3](https://www.python.org/downloads/) (tick *Add python.exe to
+PATH*), then drag a song file, or a folder of stems, onto `Tools/ImportSong.bat`. The first run installs
+what it needs (numpy, ffmpeg, and Demucs with PyTorch for finished songs, about 2 GB) and downloads
+the model. Separation takes a few minutes per song on a CPU; installing the CUDA build of PyTorch
+first (pytorch.org) makes it much faster on an NVIDIA card.
+
+From a terminal:
+
+```sh
+pip install numpy imageio-ffmpeg demucs
+python Tools/import_song.py "My Song.mp3" --title "My Song" --artist "Me"
+python Tools/import_song.py --stems "My Song stems/" --title "My Song"      # stems you already have
+```
+
+Options: `--bpm` if the detected tempo is wrong, `--offset-ms` for the song's audio offset,
+`--model htdemucs` for the 4-instrument model, `--no-snap` to keep raw note times. Then start (or
+restart) the game; `amp.AutoPlay 1` in the console plays every lane so you can check the chart.
+Imported audio is ignored by git. Only import songs you have the rights to use.
+
 ## Song format (spec §14.1, §20)
 
 A song is a folder under `Songs/` containing `song.json` (or any `.json` file) and its audio. The

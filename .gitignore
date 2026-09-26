@@ -23,6 +23,8 @@ compile_commands.json
 
 # Audio produced by Tools/generate_demo_song.py (regenerate instead of committing ~20 MB of PCM)
 /Songs/neon_drive/audio.wav
+# Imported songs: their audio stays local (large, and not ours to publish).
+/Songs/**/*.wav
 
 # Python
 __pycache__/
