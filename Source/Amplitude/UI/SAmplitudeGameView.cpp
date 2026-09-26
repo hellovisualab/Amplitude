@@ -1,5 +1,6 @@
 #include "UI/SAmplitudeGameView.h"
 
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "Core/AmpRules.h"
 #include "Data/AmplitudeSongLibrary.h"
 #include "Fonts/FontMeasure.h"
@@ -9,23 +10,32 @@
 #include "Game/AmplitudeUserSettings.h"
 #include "Rendering/DrawElements.h"
 #include "Rendering/SlateRenderer.h"
+#include "Stage/AmplitudeStage.h"
 #include "UI/AmplitudeStyle.h"
 
 #include <algorithm>
 
 namespace
 {
-	constexpr int32 MaxParticles = 700;
-	constexpr float DefaultHitLine = 0.82f;
-	constexpr float DefaultShipLine = 0.9f;
-	/** Missed notes keep falling (and fading) for this long after they are judged. */
-	constexpr double MissFadeMs = 450.0;
+	const FLinearColor Ink(0.03f, 0.035f, 0.07f, 1.0f);
 
 	FLinearColor WithAlpha(const FLinearColor& Color, float Alpha)
 	{
 		FLinearColor Result = Color;
 		Result.A = Alpha;
 		return Result;
+	}
+
+	const FSlateBrush* OutlineBrush()
+	{
+		static const FSlateRoundedBoxBrush Brush(FLinearColor::Transparent, 8.0f, FLinearColor::White, 2.0f);
+		return &Brush;
+	}
+
+	const FSlateBrush* PillBrush()
+	{
+		static const FSlateRoundedBoxBrush Brush(FLinearColor::White, 10.0f);
+		return &Brush;
 	}
 
 	void DrawBox(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color, const FSlateBrush* Brush = nullptr)
@@ -36,90 +46,6 @@ namespace
 		}
 		FSlateDrawElement::MakeBox(Out, Layer, Geometry.ToPaintGeometry(Size, FSlateLayoutTransform(Position)),
 			Brush != nullptr ? Brush : AmplitudeStyle::WhiteBrush(), ESlateDrawEffect::None, Color);
-	}
-
-	void DrawCenteredBox(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& Center, const FVector2D& Size, const FLinearColor& Color, const FSlateBrush* Brush = nullptr)
-	{
-		DrawBox(Out, Layer, Geometry, Center - Size * 0.5, Size, Color, Brush);
-	}
-
-	void DrawRotatedBox(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& Center, const FVector2D& Size, float AngleRadians, const FLinearColor& Color, const FSlateBrush* Brush = nullptr)
-	{
-		if (Color.A <= 0.001f)
-		{
-			return;
-		}
-		const FGeometry Child = Geometry.MakeChild(Size, FSlateLayoutTransform(Center - Size * 0.5), FSlateRenderTransform(FQuat2D(AngleRadians)), FVector2D(0.5, 0.5));
-		FSlateDrawElement::MakeBox(Out, Layer, Child.ToPaintGeometry(), Brush != nullptr ? Brush : AmplitudeStyle::WhiteBrush(), ESlateDrawEffect::None, Color);
-	}
-
-	void DrawLines(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const TArray<FVector2D>& Points, const FLinearColor& Color, float Thickness)
-	{
-		if (Points.Num() < 2 || Color.A <= 0.001f)
-		{
-			return;
-		}
-		TArray<FVector2f> LocalPoints;
-		LocalPoints.Reserve(Points.Num());
-		for (const FVector2D& Point : Points)
-		{
-			LocalPoints.Add(FVector2f(Point));
-		}
-		FSlateDrawElement::MakeLines(Out, Layer, Geometry.ToPaintGeometry(), MoveTemp(LocalPoints), ESlateDrawEffect::None, Color, true, Thickness);
-	}
-
-	void DrawRectOutline(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color, float Thickness)
-	{
-		const TArray<FVector2D> Points = {
-			Position,
-			Position + FVector2D(Size.X, 0.0),
-			Position + Size,
-			Position + FVector2D(0.0, Size.Y),
-			Position};
-		DrawLines(Out, Layer, Geometry, Points, Color, Thickness);
-	}
-
-	void DrawCircle(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& Center, float Radius, const FLinearColor& Color, float Thickness)
-	{
-		constexpr int32 Segments = 40;
-		TArray<FVector2D> Points;
-		Points.Reserve(Segments + 1);
-		for (int32 Index = 0; Index <= Segments; ++Index)
-		{
-			const double Angle = 2.0 * UE_DOUBLE_PI * Index / Segments;
-			Points.Add(Center + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Radius);
-		}
-		DrawLines(Out, Layer, Geometry, Points, Color, Thickness);
-	}
-
-	/** Solid triangle drawn as horizontal spans (Slate has no filled-polygon primitive without a texture resource). */
-	void DrawFilledTriangle(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& A, const FVector2D& B, const FVector2D& C, const FLinearColor& Color)
-	{
-		const FVector2D Vertices[3] = {A, B, C};
-		const double MinY = FMath::Min3(A.Y, B.Y, C.Y);
-		const double MaxY = FMath::Max3(A.Y, B.Y, C.Y);
-		constexpr double Step = 1.5;
-		for (double Y = MinY; Y <= MaxY; Y += Step)
-		{
-			double Left = TNumericLimits<double>::Max();
-			double Right = TNumericLimits<double>::Lowest();
-			for (int32 Edge = 0; Edge < 3; ++Edge)
-			{
-				const FVector2D& P = Vertices[Edge];
-				const FVector2D& Q = Vertices[(Edge + 1) % 3];
-				if (FMath::IsNearlyEqual(P.Y, Q.Y) || Y < FMath::Min(P.Y, Q.Y) || Y > FMath::Max(P.Y, Q.Y))
-				{
-					continue;
-				}
-				const double X = P.X + (Y - P.Y) * (Q.X - P.X) / (Q.Y - P.Y);
-				Left = FMath::Min(Left, X);
-				Right = FMath::Max(Right, X);
-			}
-			if (Right >= Left)
-			{
-				DrawLines(Out, Layer, Geometry, {FVector2D(Left, Y), FVector2D(Right, Y)}, Color, 2.0f);
-			}
-		}
 	}
 
 	FVector2D MeasureText(const FString& Text, const FSlateFontInfo& Font)
@@ -139,7 +65,7 @@ namespace
 		const FVector2D Position = Anchor - Size * Align;
 		if (bShadow)
 		{
-			FSlateDrawElement::MakeText(Out, Layer, Geometry.ToPaintGeometry(Size, FSlateLayoutTransform(Position + FVector2D(2.0, 2.0))), Text, Font, ESlateDrawEffect::None, FLinearColor(0.0f, 0.0f, 0.0f, Color.A * 0.6f));
+			FSlateDrawElement::MakeText(Out, Layer, Geometry.ToPaintGeometry(Size, FSlateLayoutTransform(Position + FVector2D(0.0, 2.0))), Text, Font, ESlateDrawEffect::None, FLinearColor(0.0f, 0.0f, 0.05f, Color.A * 0.45f));
 		}
 		FSlateDrawElement::MakeText(Out, Layer + 1, Geometry.ToPaintGeometry(Size, FSlateLayoutTransform(Position)), Text, Font, ESlateDrawEffect::None, Color);
 	}
@@ -168,20 +94,18 @@ namespace
 	{
 		return FString::Printf(TEXT("%ds"), FMath::CeilToInt32(FMath::Max(0.0, Milliseconds) / 1000.0));
 	}
-}
 
-// ---------------------------------------------------------------------------------------------
-
-FVector2D SAmplitudeGameView::FLayout::ToScreen(const FVector2D& Normalized) const
-{
-	const FVector2D Center(FieldLeft + FieldWidth * 0.5f, FieldTop + FieldHeight * 0.5f);
-	const FVector2D Point(FieldLeft + Normalized.X * FieldWidth, FieldTop + Normalized.Y * FieldHeight);
-	return Center + (Point - Center) * Zoom + Shake;
-}
-
-float SAmplitudeGameView::FLayout::LaneCenterX(int32 Lane)
-{
-	return (static_cast<float>(Lane) + 0.5f) / static_cast<float>(Amp::NumLanes);
+	/** A rounded "keycap" with a key name inside; returns its width. */
+	float PaintKeycap(FSlateWindowElementList& Out, int32 Layer, const FGeometry& Geometry, const FVector2D& Position, const FString& Label, const FLinearColor& Tint, float Scale, float Alpha)
+	{
+		const FSlateFontInfo Font = AmplitudeStyle::Font(14.0f * Scale);
+		const FVector2D TextSize = MeasureText(Label, Font);
+		const FVector2D Size(FMath::Max(40.0 * Scale, TextSize.X + 20.0 * Scale), 40.0 * Scale);
+		DrawBox(Out, Layer, Geometry, Position, Size, WithAlpha(Ink, 0.72f * Alpha), PillBrush());
+		DrawBox(Out, Layer + 1, Geometry, Position, Size, WithAlpha(Tint, 0.9f * Alpha), OutlineBrush());
+		PaintText(Out, Layer + 1, Geometry, Label, Font, Position + Size * 0.5, WithAlpha(AmplitudeStyle::Text, Alpha), FVector2D(0.5, 0.5), false);
+		return static_cast<float>(Size.X);
+	}
 }
 
 void SAmplitudeGameView::Construct(const FArguments& InArgs)
@@ -203,67 +127,56 @@ const FAmplitudeSession* SAmplitudeGameView::GetSession() const
 	return Owner != nullptr ? Owner->GetSession() : nullptr;
 }
 
-float SAmplitudeGameView::GetHitLineNormalized() const
+FVector SAmplitudeGameView::GetHitPoint(int32 Lane, int32 Column) const
 {
-	const FAmplitudeSession* Session = GetSession();
-	return Session != nullptr ? static_cast<float>(Session->GetSimulation().GetRules().HitLineY) : DefaultHitLine;
+	const AAmplitudeDirector* Owner = Director.Get();
+	const AAmplitudeStage* Stage = Owner != nullptr ? Owner->GetStage() : nullptr;
+	return Stage != nullptr ? Stage->GetHitPoint(Lane, Column) : FVector::ZeroVector;
 }
 
-float SAmplitudeGameView::GetShipNormalized() const
+FVector SAmplitudeGameView::GetShipLocation() const
 {
-	const FAmplitudeSession* Session = GetSession();
-	return Session != nullptr ? static_cast<float>(Session->GetSimulation().GetRules().ShipY) : DefaultShipLine;
+	const AAmplitudeDirector* Owner = Director.Get();
+	const AAmplitudeStage* Stage = Owner != nullptr ? Owner->GetStage() : nullptr;
+	return Stage != nullptr ? Stage->GetShipLocation() : FVector::ZeroVector;
+}
+
+bool SAmplitudeGameView::ProjectToLocal(const FVector& WorldLocation, const FVector2D& LocalSize, FVector2D& OutLocal) const
+{
+	const AAmplitudeDirector* Owner = Director.Get();
+	const AAmplitudeStage* Stage = Owner != nullptr ? Owner->GetStage() : nullptr;
+	FVector2D Fraction;
+	if (Stage == nullptr || !Stage->ProjectToViewport(WorldLocation, Fraction))
+	{
+		return false;
+	}
+	OutLocal = Fraction * LocalSize;
+	return true;
 }
 
 void SAmplitudeGameView::ResetEffects()
 {
-	Particles.Reset();
 	Popups.Reset();
 	Banners.Reset();
-	Rings.Reset();
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
-	{
-		LaneFlash[Lane] = 0.0f;
-		LaneMissFlash[Lane] = 0.0f;
-	}
-	ShakeAmplitude = 0.0f;
-	ShakeOffset = FVector2D::ZeroVector;
-	ZoomPulse = 0.0f;
 	FeverFlash = 0.0f;
-	ShipTrail = 0.0f;
-	TrailFromLane = -1;
+	ScorePulse = 0.0f;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Effects
-
-void SAmplitudeGameView::SpawnBurst(int32 Lane, float Y, const FLinearColor& Color, int32 Count, float Speed, bool bDownward)
-{
-	const float X = (static_cast<float>(Lane) + 0.5f) / static_cast<float>(Amp::NumLanes);
-	for (int32 Index = 0; Index < Count && Particles.Num() < MaxParticles; ++Index)
-	{
-		FParticle Particle;
-		Particle.Position = FVector2D(X + FMath::FRandRange(-0.02f, 0.02f), Y);
-		const float Angle = bDownward ? FMath::FRandRange(0.35f, 2.8f) : FMath::FRandRange(-3.0f, -0.14f);
-		const float Magnitude = Speed * FMath::FRandRange(0.4f, 1.0f);
-		// Horizontal speed is scaled down because the field is much wider than it is tall per lane.
-		Particle.Velocity = FVector2D(FMath::Cos(Angle) * Magnitude * 0.35f, FMath::Sin(Angle) * Magnitude);
-		Particle.Color = Color;
-		Particle.Life = FMath::FRandRange(0.35f, 0.7f);
-		Particle.Size = FMath::FRandRange(3.0f, 7.0f);
-		Particles.Add(Particle);
-	}
-}
-
-void SAmplitudeGameView::AddPopup(const FString& Text, const FLinearColor& Color, int32 Lane, float Y, float Size, float Life)
+void SAmplitudeGameView::AddPopup(const FString& Text, const FLinearColor& Color, const FVector& WorldLocation, float Size, float Life, const FVector2D& Offset)
 {
 	FPopup Popup;
 	Popup.Text = Text;
 	Popup.Color = Color;
-	Popup.Position = FVector2D((static_cast<float>(Lane) + 0.5f) / static_cast<float>(Amp::NumLanes), Y);
+	Popup.WorldLocation = WorldLocation;
+	Popup.Offset = Offset;
 	Popup.Size = Size;
 	Popup.Life = Life;
 	Popups.Add(Popup);
+	constexpr int32 MaxPopups = 40;
+	if (Popups.Num() > MaxPopups)
+	{
+		Popups.RemoveAt(0);
+	}
 }
 
 void SAmplitudeGameView::AddBanner(const FString& Text, const FLinearColor& Color, float Life)
@@ -277,101 +190,66 @@ void SAmplitudeGameView::AddBanner(const FString& Text, const FLinearColor& Colo
 	Banners.Add(Banner);
 }
 
-void SAmplitudeGameView::AddShake(float Pixels)
-{
-	ShakeAmplitude = FMath::Max(ShakeAmplitude, Pixels);
-}
-
 void SAmplitudeGameView::HandleSimEvent(const Amp::FEvent& Event)
 {
 	const FAmplitudeSession* Session = GetSession();
-	const bool bFever = Session != nullptr && Session->GetSimulation().IsFeverActive();
-	const float HitY = GetHitLineNormalized();
-	const float ShipY = GetShipNormalized();
 	const int32 Lane = FMath::Clamp(Event.Lane, 0, Amp::NumLanes - 1);
+	const int32 Column = Event.Column >= 0 ? Event.Column : 1;
 	const FLinearColor LaneColor = AmplitudeStyle::GetLaneColor(Lane);
 
 	switch (Event.Type)
 	{
 	case Amp::EEventType::NoteHit:
 	{
-		const bool bPerfect = Event.Judgement == Amp::EJudgement::Perfect;
-		LaneFlash[Lane] = 1.0f;
 		if (Event.bAuto)
 		{
-			SpawnBurst(Lane, HitY, LaneColor, 5, 0.35f, false);
 			break;
 		}
+		const bool bPerfect = Event.Judgement == Amp::EJudgement::Perfect;
 		const FLinearColor Color = bPerfect ? AmplitudeStyle::Perfect : AmplitudeStyle::Good;
-		SpawnBurst(Lane, HitY, Color, bPerfect ? 16 : 9, bPerfect ? 0.7f : 0.5f, false);
-		AddPopup(bPerfect ? TEXT("PERFECT") : TEXT("GOOD"), Color, Lane, HitY - 0.05f, 22.0f, 0.55f);
-		AddPopup(FString::Printf(TEXT("+%lld"), static_cast<long long>(Event.Points)), WithAlpha(Color, 0.9f), Lane, HitY - 0.1f, 15.0f, 0.5f);
-		// Spec 12.6: Perfect = 2-3 px shake and a slight zoom, Good = smaller shake, Fever = 5-8 px.
-		AddShake(bFever ? 5.0f : (bPerfect ? 2.5f : 1.5f));
-		if (bPerfect)
+		const FVector Point = GetHitPoint(Lane, Column);
+		AddPopup(bPerfect ? TEXT("PERFECT") : TEXT("GOOD"), Color, Point, 22.0f, 0.55f, FVector2D(0.0, -34.0));
+		AddPopup(FString::Printf(TEXT("+%lld"), static_cast<long long>(Event.Points)), WithAlpha(AmplitudeStyle::Text, 0.9f), Point, 15.0f, 0.5f, FVector2D(0.0, -8.0));
+		ScorePulse = 1.0f;
+		if (Session != nullptr)
 		{
-			ZoomPulse = 1.0f;
+			const Amp::FDifficultyParams& Params = Session->GetSimulation().GetParams();
+			const double Now = Amp::GetComboMultiplier(Params, Event.Count);
+			if (Now > Amp::GetComboMultiplier(Params, Event.Count - 1))
+			{
+				AddPopup(FString::Printf(TEXT("COMBO x%.1f"), Now), LaneColor, GetHitPoint(Lane, 1), 24.0f, 0.9f, FVector2D(0.0, -80.0));
+			}
 		}
 		break;
 	}
 
 	case Amp::EEventType::NoteMissed:
-		LaneMissFlash[Lane] = 1.0f;
-		SpawnBurst(Lane, HitY, AmplitudeStyle::Miss, 8, 0.45f, true);
-		AddPopup(TEXT("MISS"), AmplitudeStyle::Miss, Lane, HitY - 0.05f, 22.0f, 0.6f);
-		break;
-
-	case Amp::EEventType::GhostPress:
-		LaneFlash[Lane] = FMath::Max(LaneFlash[Lane], 0.35f);
-		break;
-
-	case Amp::EEventType::ShipMoved:
-		TrailFromLane = Event.Count;
-		ShipTrail = 1.0f;
+		AddPopup(TEXT("MISS"), AmplitudeStyle::Miss, GetHitPoint(Lane, Column), 22.0f, 0.6f, FVector2D(0.0, -34.0));
 		break;
 
 	case Amp::EEventType::LaneCaptured:
-	{
-		FRing Ring;
-		Ring.Position = FVector2D(FLayout::LaneCenterX(Lane), HitY);
-		Ring.Color = LaneColor;
-		Ring.Life = 0.7f;
-		Ring.MaxRadius = 0.25f;
-		Rings.Add(Ring);
-		LaneFlash[Lane] = 1.0f;
-		AddPopup(TEXT("CAPTURED!"), LaneColor, Lane, 0.3f, 24.0f, 1.0f);
-		AddPopup(FString::Printf(TEXT("-%d ENERGY"), Event.Count), WithAlpha(AmplitudeStyle::TextDim, 0.9f), Lane, 0.35f, 13.0f, 1.0f);
+		AddPopup(TEXT("CAPTURED!"), LaneColor, GetHitPoint(Lane, 1), 32.0f, 1.2f, FVector2D(0.0, -120.0));
+		AddPopup(FString::Printf(TEXT("-%d ENERGY"), Event.Count), WithAlpha(AmplitudeStyle::TextDim, 0.95f), GetHitPoint(Lane, 1), 14.0f, 1.2f, FVector2D(0.0, -88.0));
 		break;
-	}
 
 	case Amp::EEventType::CaptureExpired:
-		AddPopup(TEXT("RELEASED"), WithAlpha(LaneColor, 0.8f), Lane, 0.3f, 16.0f, 0.9f);
+		AddPopup(TEXT("RELEASED"), WithAlpha(LaneColor, 0.9f), GetHitPoint(Lane, 1), 18.0f, 1.0f, FVector2D(0.0, -100.0));
 		break;
 
 	case Amp::EEventType::LaneMuted:
-		AddPopup(TEXT("MUTED"), AmplitudeStyle::Miss, Lane, 0.45f, 24.0f, 1.0f);
+		AddPopup(TEXT("MUTED"), AmplitudeStyle::Miss, GetHitPoint(Lane, 1), 26.0f, 1.0f, FVector2D(0.0, -110.0));
 		break;
 
 	case Amp::EEventType::LaneUnmuted:
-		AddPopup(TEXT("BACK IN THE MIX"), LaneColor, Lane, 0.45f, 16.0f, 0.9f);
+		AddPopup(TEXT("BACK IN THE MIX"), LaneColor, GetHitPoint(Lane, 1), 18.0f, 1.0f, FVector2D(0.0, -110.0));
 		break;
 
 	case Amp::EEventType::PowerupCollected:
 	{
 		const FLinearColor Color = AmplitudeStyle::GetPowerupColor(Event.Powerup);
-		FString Message = GetPowerupStatusName(Event.Powerup) + TEXT("!");
-		if (Event.Powerup == Amp::EPowerupType::LaneCleaner)
-		{
-			Message = TEXT("LANE CLEANER - PRESS A LANE TO CLEAR IT");
-		}
-		AddBanner(Message, Color, Event.Powerup == Amp::EPowerupType::LaneCleaner ? 3.0f : 1.4f);
-		FRing Ring;
-		Ring.Position = FVector2D(FLayout::LaneCenterX(Lane), ShipY);
-		Ring.Color = Color;
-		Rings.Add(Ring);
-		SpawnBurst(Lane, ShipY, Color, 18, 0.8f, false);
-		AddPopup(FString::Printf(TEXT("+%lld"), static_cast<long long>(Event.Points)), Color, Lane, ShipY - 0.06f, 18.0f, 0.8f);
-		AddShake(Event.Powerup == Amp::EPowerupType::Fever ? 7.0f : 4.5f);
+		const bool bCleaner = Event.Powerup == Amp::EPowerupType::LaneCleaner;
+		AddBanner(bCleaner ? FString(TEXT("LANE CLEANER - PRESS A GEM BUTTON TO CLEAR YOUR LANE")) : GetPowerupStatusName(Event.Powerup) + TEXT("!"), Color, bCleaner ? 3.0f : 1.4f);
+		AddPopup(FString::Printf(TEXT("+%lld"), static_cast<long long>(Event.Points)), Color, GetShipLocation(), 20.0f, 0.8f, FVector2D(0.0, -60.0));
 		if (Event.Powerup == Amp::EPowerupType::Fever)
 		{
 			FeverFlash = 1.0f;
@@ -380,29 +258,16 @@ void SAmplitudeGameView::HandleSimEvent(const Amp::FEvent& Event)
 	}
 
 	case Amp::EEventType::LaneCleared:
-	{
-		const FLinearColor Color = AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::LaneCleaner);
-		for (int32 Step = 0; Step < 6; ++Step)
-		{
-			SpawnBurst(Lane, 0.1f + Step * 0.13f, Color, 5, 0.4f, false);
-		}
-		AddPopup(FString::Printf(TEXT("CLEARED %d"), Event.Count), Color, Lane, 0.4f, 22.0f, 1.0f);
+		AddPopup(FString::Printf(TEXT("CLEARED %d"), Event.Count), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::LaneCleaner), GetHitPoint(Lane, 1), 24.0f, 1.0f, FVector2D(0.0, -110.0));
 		Banners.Reset();
 		break;
-	}
 
 	case Amp::EEventType::ShieldAbsorbedMiss:
-	{
-		FRing Ring;
-		Ring.Position = FVector2D(FLayout::LaneCenterX(Lane), HitY);
-		Ring.Color = AmplitudeStyle::Shield;
-		Rings.Add(Ring);
-		AddPopup(TEXT("SHIELDED"), AmplitudeStyle::Shield, Lane, HitY - 0.14f, 18.0f, 0.8f);
+		AddPopup(TEXT("SHIELDED"), AmplitudeStyle::Shield, GetShipLocation(), 20.0f, 0.8f, FVector2D(0.0, -70.0));
 		break;
-	}
 
 	case Amp::EEventType::FeverBroken:
-		AddBanner(TEXT("FEVER BROKEN"), WithAlpha(AmplitudeStyle::Fever, 0.8f), 1.0f);
+		AddBanner(TEXT("FEVER BROKEN"), WithAlpha(AmplitudeStyle::Fever, 0.85f), 1.0f);
 		break;
 
 	case Amp::EEventType::AutoCaptureFailed:
@@ -415,15 +280,10 @@ void SAmplitudeGameView::HandleSimEvent(const Amp::FEvent& Event)
 
 	case Amp::EEventType::GameOver:
 		AddBanner(TEXT("GAME OVER"), AmplitudeStyle::Miss, 10.0f);
-		AddShake(8.0f);
 		break;
 
 	case Amp::EEventType::SongComplete:
 		AddBanner(TEXT("SONG COMPLETE!"), AmplitudeStyle::Perfect, 10.0f);
-		for (int32 Burst = 0; Burst < Amp::NumLanes; ++Burst)
-		{
-			SpawnBurst(Burst, HitY, AmplitudeStyle::GetLaneColor(Burst), 20, 0.9f, false);
-		}
 		break;
 
 	default:
@@ -441,34 +301,12 @@ void SAmplitudeGameView::Tick(const FGeometry& AllottedGeometry, const double In
 	{
 		SmoothedFps = FMath::Lerp(SmoothedFps, 1.0f / InDeltaTime, 0.05f);
 	}
-
-	for (int32 Index = Particles.Num() - 1; Index >= 0; --Index)
-	{
-		FParticle& Particle = Particles[Index];
-		Particle.Age += Dt;
-		if (Particle.Age >= Particle.Life)
-		{
-			Particles.RemoveAtSwap(Index);
-			continue;
-		}
-		Particle.Position += Particle.Velocity * Dt;
-		Particle.Velocity.Y += 0.9 * Dt;
-		Particle.Velocity *= FMath::Pow(0.08f, Dt);
-	}
 	for (int32 Index = Popups.Num() - 1; Index >= 0; --Index)
 	{
 		Popups[Index].Age += Dt;
 		if (Popups[Index].Age >= Popups[Index].Life)
 		{
 			Popups.RemoveAt(Index);
-		}
-	}
-	for (int32 Index = Rings.Num() - 1; Index >= 0; --Index)
-	{
-		Rings[Index].Age += Dt;
-		if (Rings[Index].Age >= Rings[Index].Life)
-		{
-			Rings.RemoveAtSwap(Index);
 		}
 	}
 	for (int32 Index = Banners.Num() - 1; Index >= 0; --Index)
@@ -479,543 +317,329 @@ void SAmplitudeGameView::Tick(const FGeometry& AllottedGeometry, const double In
 			Banners.RemoveAt(Index);
 		}
 	}
-
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
-	{
-		LaneFlash[Lane] = FMath::Max(0.0f, LaneFlash[Lane] - Dt * 5.0f);
-		LaneMissFlash[Lane] = FMath::Max(0.0f, LaneMissFlash[Lane] - Dt * 3.0f);
-	}
-
-	// Shake decays back to centre in roughly 200 ms (spec 12.6.3).
-	ShakeAmplitude *= FMath::Exp(-Dt * 15.0f);
-	if (ShakeAmplitude < 0.1f)
-	{
-		ShakeAmplitude = 0.0f;
-	}
-	ShakeOffset = FVector2D(FMath::FRandRange(-1.0f, 1.0f), FMath::FRandRange(-1.0f, 1.0f)) * ShakeAmplitude;
-	ZoomPulse *= FMath::Exp(-Dt * 14.0f);
 	FeverFlash = FMath::Max(0.0f, FeverFlash - Dt * 2.0f);
-	ShipTrail = FMath::Max(0.0f, ShipTrail - Dt / 0.12f);
+	ScorePulse = FMath::Max(0.0f, ScorePulse - Dt * 6.0f);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Painting
 
-SAmplitudeGameView::FLayout SAmplitudeGameView::ComputeLayout(const FGeometry& Geometry, const Amp::FSimulation* Simulation) const
-{
-	FLayout Layout;
-	Layout.Size = FVector2D(Geometry.GetLocalSize());
-	const float Width = static_cast<float>(Layout.Size.X);
-	const float Height = static_cast<float>(Layout.Size.Y);
-	Layout.TopBar = FMath::Max(44.0f, Height * 0.075f);
-	Layout.BottomBar = FMath::Max(84.0f, Height * 0.13f);
-	Layout.FieldLeft = Width * 0.03f;
-	Layout.FieldWidth = Width - Layout.FieldLeft * 2.0f;
-	Layout.FieldTop = Layout.TopBar + 6.0f;
-	Layout.FieldHeight = FMath::Max(10.0f, Height - Layout.TopBar - Layout.BottomBar - 12.0f);
-	Layout.LaneWidth = Layout.FieldWidth / static_cast<float>(Amp::NumLanes);
-	const float HitNorm = Simulation != nullptr ? static_cast<float>(Simulation->GetRules().HitLineY) : DefaultHitLine;
-	const float ShipNorm = Simulation != nullptr ? static_cast<float>(Simulation->GetRules().ShipY) : DefaultShipLine;
-	Layout.HitLineY = Layout.FieldTop + Layout.FieldHeight * HitNorm;
-	Layout.ShipY = Layout.FieldTop + Layout.FieldHeight * ShipNorm;
-	Layout.Shake = ShakeOffset;
-	Layout.Zoom = 1.0f + ZoomPulse * 0.012f;
-	Layout.bDesaturate = Simulation != nullptr && Simulation->IsSlowMotionActive();
-	return Layout;
-}
-
-FLinearColor SAmplitudeGameView::Tint(const FLayout& Layout, const FLinearColor& Color) const
-{
-	if (!Layout.bDesaturate)
-	{
-		return Color;
-	}
-	// Slow Motion: reduce saturation by 30% (spec 12.6.2).
-	const float Luminance = Color.R * 0.3f + Color.G * 0.59f + Color.B * 0.11f;
-	return FLinearColor(FMath::Lerp(Color.R, Luminance, 0.3f), FMath::Lerp(Color.G, Luminance, 0.3f), FMath::Lerp(Color.B, Luminance, 0.3f), Color.A);
-}
-
-float SAmplitudeGameView::NoteY(const FLayout& Layout, const Amp::FSimulation& Simulation, double NoteTimeMs, double SongTimeMs) const
-{
-	const double Approach = FMath::Max(1.0, Simulation.GetParams().ApproachTimeMs);
-	const double HitNorm = Simulation.GetRules().HitLineY;
-	return static_cast<float>(HitNorm * (1.0 - (NoteTimeMs - SongTimeMs) / Approach));
-}
-
 int32 SAmplitudeGameView::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
 {
 	const FAmplitudeSession* Session = GetSession();
-	const FLayout Layout = ComputeLayout(AllottedGeometry, Session != nullptr ? &Session->GetSimulation() : nullptr);
-
-	int32 Layer = PaintBackground(Layout, AllottedGeometry, OutDrawElements, LayerId, Session);
 	if (Session == nullptr)
 	{
-		return PaintAttract(Layout, AllottedGeometry, OutDrawElements, Layer);
+		return LayerId;
 	}
 
-	Layer = PaintLanes(Layout, AllottedGeometry, OutDrawElements, Layer, *Session);
-	Layer = PaintNotes(Layout, AllottedGeometry, OutDrawElements, Layer, *Session);
-	Layer = PaintPowerups(Layout, AllottedGeometry, OutDrawElements, Layer, *Session);
-	Layer = PaintShip(Layout, AllottedGeometry, OutDrawElements, Layer, *Session);
-	Layer = PaintEffects(Layout, AllottedGeometry, OutDrawElements, Layer);
-	Layer = PaintHud(Layout, AllottedGeometry, OutDrawElements, Layer, *Session);
-	return PaintCenterMessages(Layout, AllottedGeometry, OutDrawElements, Layer, *Session);
+	const FVector2D Size(AllottedGeometry.GetLocalSize());
+	const float Scale = FMath::Clamp(static_cast<float>(Size.Y) / 1080.0f, 0.6f, 1.8f);
+
+	int32 Layer = LayerId;
+	if (FeverFlash > 0.0f)
+	{
+		DrawBox(OutDrawElements, Layer, AllottedGeometry, FVector2D::ZeroVector, Size, WithAlpha(AmplitudeStyle::Fever, 0.18f * FeverFlash));
+	}
+	Layer = PaintPopups(AllottedGeometry, OutDrawElements, Layer + 1, Scale);
+	Layer = PaintTopBar(AllottedGeometry, OutDrawElements, Layer, *Session, Scale);
+	Layer = PaintLaneStrip(AllottedGeometry, OutDrawElements, Layer, *Session, Scale);
+	Layer = PaintPowerups(AllottedGeometry, OutDrawElements, Layer, *Session, Scale);
+	Layer = PaintPrompts(AllottedGeometry, OutDrawElements, Layer, *Session, Scale);
+	return PaintCenterMessages(AllottedGeometry, OutDrawElements, Layer, *Session, Scale);
 }
 
-int32 SAmplitudeGameView::PaintBackground(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession* Session) const
-{
-	DrawBox(Out, Layer, Geometry, FVector2D::ZeroVector, Layout.Size, AmplitudeStyle::Background);
-	// A soft vertical gradient (black at the top to dark grey at the bottom, spec 12.2.2).
-	constexpr int32 Bands = 8;
-	for (int32 Band = 0; Band < Bands; ++Band)
-	{
-		const float Top = static_cast<float>(Layout.Size.Y) * Band / Bands;
-		DrawBox(Out, Layer, Geometry, FVector2D(0.0, Top), FVector2D(Layout.Size.X, Layout.Size.Y / Bands + 1.0), FLinearColor(0.05f, 0.05f, 0.08f, 0.04f * Band));
-	}
-
-	if (Session != nullptr && Session->GetSimulation().IsFeverActive())
-	{
-		// Fever Mode: red/orange tint over the screen (spec 12.6.2), stronger for a moment on pickup.
-		const float Pulse = 0.5f + 0.5f * FMath::Sin(static_cast<float>(Time) * 8.0f);
-		DrawBox(Out, Layer + 1, Geometry, FVector2D::ZeroVector, Layout.Size, WithAlpha(AmplitudeStyle::Fever, 0.08f + 0.04f * Pulse + 0.25f * FeverFlash));
-	}
-	return Layer + 2;
-}
-
-int32 SAmplitudeGameView::PaintAttract(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer) const
-{
-	// Menu backdrop: faint lanes with notes drifting down to the beat of nothing in particular.
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
-	{
-		const FLinearColor Color = AmplitudeStyle::GetLaneColor(Lane);
-		const float Left = Layout.FieldLeft + Layout.LaneWidth * Lane;
-		DrawBox(Out, Layer, Geometry, FVector2D(Left, 0.0), FVector2D(Layout.LaneWidth, Layout.Size.Y), WithAlpha(Color, 0.025f));
-		DrawBox(Out, Layer, Geometry, FVector2D(Left, 0.0), FVector2D(1.0, Layout.Size.Y), FLinearColor(1.0f, 1.0f, 1.0f, 0.04f));
-
-		for (int32 Note = 0; Note < 5; ++Note)
-		{
-			const float Speed = 0.08f + 0.03f * ((Lane * 7 + Note * 3) % 5);
-			const float Phase = FMath::Frac(static_cast<float>(Time) * Speed + (Lane * 0.37f + Note * 0.21f));
-			const FVector2D Center(Left + Layout.LaneWidth * 0.5f, Phase * Layout.Size.Y);
-			const FVector2D Size(FMath::Clamp(Layout.LaneWidth * 0.4f, 20.0f, 110.0f), FMath::Clamp(Layout.LaneWidth * 0.14f, 10.0f, 30.0f));
-			DrawCenteredBox(Out, Layer + 1, Geometry, Center, Size + FVector2D(14.0, 14.0), WithAlpha(Color, 0.05f), AmplitudeStyle::RoundedBrush());
-			DrawCenteredBox(Out, Layer + 2, Geometry, Center, Size, WithAlpha(Color, 0.22f), AmplitudeStyle::RoundedBrush());
-		}
-	}
-	return Layer + 3;
-}
-
-int32 SAmplitudeGameView::PaintLanes(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const
+int32 SAmplitudeGameView::PaintTopBar(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const
 {
 	const Amp::FSimulation& Simulation = Session.GetSimulation();
 	const UAmplitudeUserSettings* Settings = UAmplitudeUserSettings::Get();
-	const AAmplitudeDirector* Owner = Director.Get();
-	const bool bGamepad = Owner != nullptr && Owner->IsUsingGamepad();
-	const float BeatPulse = FMath::Pow(1.0f - static_cast<float>(Session.GetBeatPhase()), 3.0f);
-	const float CleanerPulse = Simulation.IsLaneCleanerArmed() ? 0.5f + 0.5f * FMath::Sin(static_cast<float>(Time) * 12.0f) : 0.0f;
-	const FSlateFontInfo LabelFont = AmplitudeStyle::Font(FMath::Clamp(Layout.LaneWidth * 0.075f, 10.0f, 18.0f));
-	const FSlateFontInfo KeyFont = AmplitudeStyle::Font(FMath::Clamp(Layout.LaneWidth * 0.07f, 10.0f, 16.0f));
-	const float NoteHeight = FMath::Clamp(Layout.LaneWidth * 0.46f * 0.36f, 12.0f, 34.0f);
+	const FVector2D Size(Geometry.GetLocalSize());
+	const float Margin = 30.0f * Scale;
 
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
+	// ---- Score (top left) with the combo and powerup multipliers beside it
+	PaintText(Out, Layer, Geometry, TEXT("SCORE"), AmplitudeStyle::Font(13.0f * Scale), FVector2D(Margin, Margin), AmplitudeStyle::TextDim);
+	const FSlateFontInfo ScoreFont = AmplitudeStyle::Font(38.0f * Scale * (1.0f + 0.06f * ScorePulse));
+	const FString ScoreText = AmplitudeStyle::FormatScore(Simulation.GetScore()).ToString();
+	const FVector2D ScoreAnchor(Margin, Margin + 18.0f * Scale);
+	PaintText(Out, Layer, Geometry, ScoreText, ScoreFont, ScoreAnchor, AmplitudeStyle::Text);
+	const FVector2D ScoreSize = MeasureText(ScoreText, ScoreFont);
+
+	float PillX = static_cast<float>(ScoreAnchor.X + ScoreSize.X) + 16.0f * Scale;
+	const float PillY = static_cast<float>(ScoreAnchor.Y + ScoreSize.Y * 0.5) - 15.0f * Scale;
+	auto PaintPill = [&](const FString& Text, const FLinearColor& Color)
 	{
-		const Amp::FLaneState& State = Simulation.GetLane(Lane);
-		const FLinearColor Color = Tint(Layout, AmplitudeStyle::GetLaneColor(Lane));
-		const FVector2D TopLeft = Layout.ToScreen(FVector2D(static_cast<double>(Lane) / Amp::NumLanes, 0.0));
-		const FVector2D BottomRight = Layout.ToScreen(FVector2D(static_cast<double>(Lane + 1) / Amp::NumLanes, 1.0));
-		const FVector2D LaneSize = BottomRight - TopLeft;
-
-		// Lane body with a gentle gradient in the lane's colour.
-		DrawBox(Out, Layer, Geometry, TopLeft, LaneSize, WithAlpha(Color, 0.035f));
-		DrawBox(Out, Layer, Geometry, TopLeft + FVector2D(0.0, LaneSize.Y * 0.5), FVector2D(LaneSize.X, LaneSize.Y * 0.5), WithAlpha(Color, 0.03f));
-
-		if (State.bCaptured)
-		{
-			const float Pulse = 0.5f + 0.5f * FMath::Sin(static_cast<float>(Time) * 6.0f);
-			DrawBox(Out, Layer + 1, Geometry, TopLeft, LaneSize, WithAlpha(Color, 0.10f + 0.08f * Pulse));
-			DrawRectOutline(Out, Layer + 1, Geometry, TopLeft, LaneSize, WithAlpha(Color, 0.6f + 0.3f * Pulse), 2.0f);
-		}
-		if (State.bMuted)
-		{
-			DrawBox(Out, Layer + 1, Geometry, TopLeft, LaneSize, FLinearColor(0.0f, 0.0f, 0.0f, 0.45f));
-		}
-		if (CleanerPulse > 0.0f && !State.bCaptured)
-		{
-			DrawRectOutline(Out, Layer + 1, Geometry, TopLeft + FVector2D(3.0, 3.0), LaneSize - FVector2D(6.0, 6.0),
-				WithAlpha(AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::LaneCleaner), 0.4f + 0.5f * CleanerPulse), 3.0f);
-		}
-		if (LaneMissFlash[Lane] > 0.0f)
-		{
-			DrawBox(Out, Layer + 1, Geometry, TopLeft, LaneSize, WithAlpha(AmplitudeStyle::Miss, 0.12f * LaneMissFlash[Lane]));
-		}
-
-		// Separator.
-		DrawBox(Out, Layer + 1, Geometry, TopLeft, FVector2D(1.5, LaneSize.Y), FLinearColor(1.0f, 1.0f, 1.0f, 0.08f));
-
-		// Hit zone (spec 11.2.2): darker target area that pulses with the beat and flashes on hits.
-		const FVector2D ZoneCenter = Layout.ToScreen(FVector2D(Layout.LaneCenterX(Lane), (Layout.HitLineY - Layout.FieldTop) / Layout.FieldHeight));
-		const FVector2D ZoneSize(LaneSize.X * 0.84, NoteHeight * 1.9 * Layout.Zoom);
-		DrawCenteredBox(Out, Layer + 1, Geometry, ZoneCenter, ZoneSize, FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), AmplitudeStyle::RoundedBrush());
-		DrawCenteredBox(Out, Layer + 2, Geometry, ZoneCenter, ZoneSize, WithAlpha(Color, 0.08f + 0.12f * BeatPulse + 0.45f * LaneFlash[Lane]), AmplitudeStyle::RoundedBrush());
-		DrawRectOutline(Out, Layer + 2, Geometry, ZoneCenter - ZoneSize * 0.5, ZoneSize, WithAlpha(Color, 0.55f + 0.35f * LaneFlash[Lane]), 2.0f);
-
-		// Instrument name at the top of the lane and the key to press under the hit zone.
-		PaintText(Out, Layer + 3, Geometry, AmplitudeStyle::GetLaneLabel(Lane).ToString(), LabelFont,
-			FVector2D(ZoneCenter.X, TopLeft.Y + 6.0), WithAlpha(Color, State.bMuted ? 0.35f : 0.75f), FVector2D(0.5, 0.0));
-		if (Settings != nullptr)
-		{
-			const FKey Key = Settings->GetActiveProfile().GetDisplayKey(Lane, bGamepad);
-			PaintText(Out, Layer + 3, Geometry, AmplitudeStyle::GetKeyLabel(Key).ToString(), KeyFont,
-				FVector2D(ZoneCenter.X, ZoneCenter.Y + ZoneSize.Y * 0.5 + 4.0), WithAlpha(AmplitudeStyle::TextDim, 0.8f), FVector2D(0.5, 0.0));
-		}
-
-		if (State.bCaptured)
-		{
-			PaintText(Out, Layer + 3, Geometry, FString::Printf(TEXT("CAPTURED %s"), *Seconds(Simulation.GetCaptureRemainingMs(Lane))), LabelFont,
-				FVector2D(ZoneCenter.X, TopLeft.Y + 28.0), Color, FVector2D(0.5, 0.0));
-		}
-		if (State.bMuted)
-		{
-			PaintText(Out, Layer + 3, Geometry, TEXT("MUTED"), AmplitudeStyle::Font(FMath::Clamp(Layout.LaneWidth * 0.11f, 12.0f, 26.0f)),
-				FVector2D(ZoneCenter.X, TopLeft.Y + LaneSize.Y * 0.45), WithAlpha(AmplitudeStyle::Miss, 0.85f), FVector2D(0.5, 0.5));
-		}
-	}
-
-	// Right edge separator.
-	const FVector2D FieldRight = Layout.ToScreen(FVector2D(1.0, 0.0));
-	DrawBox(Out, Layer + 1, Geometry, FieldRight, FVector2D(1.5, Layout.FieldHeight * Layout.Zoom), FLinearColor(1.0f, 1.0f, 1.0f, 0.08f));
-	return Layer + 5;
-}
-
-int32 SAmplitudeGameView::PaintNotes(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const
-{
-	const Amp::FSimulation& Simulation = Session.GetSimulation();
-	const std::vector<Amp::FNote>& Notes = Simulation.GetNotes();
-	const double SongTimeMs = Session.GetSongTimeMs();
-	const double ApproachMs = Simulation.GetParams().ApproachTimeMs;
-
-	const float BaseWidth = FMath::Clamp(Layout.LaneWidth * 0.46f, 24.0f, 120.0f) * Layout.Zoom;
-	const float BaseHeight = FMath::Clamp(Layout.LaneWidth * 0.46f * 0.36f, 12.0f, 34.0f) * Layout.Zoom;
-
-	// Notes are sorted by time: start just before the oldest note that can still be on screen.
-	const double OldestMs = SongTimeMs - Simulation.GetParams().GoodWindowMs - MissFadeMs;
-	auto First = std::lower_bound(Notes.begin(), Notes.end(), OldestMs, [](const Amp::FNote& Note, double Value) { return Note.TimeMs < Value; });
-
-	const Amp::FNote* PreviousChordNote = nullptr;
-	float PreviousChordY = 0.0f;
-	for (auto It = First; It != Notes.end() && It->TimeMs <= SongTimeMs + ApproachMs; ++It)
-	{
-		const Amp::FNote& Note = *It;
-		float Alpha = 1.0f;
-		bool bMissed = false;
-		if (!Note.IsPending())
-		{
-			if (Note.Judgement != Amp::EJudgement::Miss || SongTimeMs - Note.ResolvedAtMs > MissFadeMs)
-			{
-				continue;
-			}
-			bMissed = true;
-			Alpha = 1.0f - static_cast<float>((SongTimeMs - Note.ResolvedAtMs) / MissFadeMs);
-		}
-
-		const float Y = NoteY(Layout, Simulation, Note.TimeMs, SongTimeMs);
-		if (Y < -0.05f || Y > 1.05f)
-		{
-			continue;
-		}
-		const FVector2D Center = Layout.ToScreen(FVector2D(Layout.LaneCenterX(Note.Lane), Y));
-		const FLinearColor LaneColor = Tint(Layout, AmplitudeStyle::GetLaneColor(Note.Lane));
-		const FLinearColor Color = bMissed ? FMath::Lerp(LaneColor, AmplitudeStyle::Miss, 0.7f) : LaneColor;
-		const float Width = Note.Type == Amp::ENoteType::Stream ? BaseWidth * 0.8f : BaseWidth;
-		const FVector2D Size(Width, BaseHeight);
-
-		// Chord connector between the notes of a double/triple (they are adjacent in the sorted list).
-		if (!bMissed && PreviousChordNote != nullptr && PreviousChordNote->ChordId == Note.ChordId && PreviousChordNote->IsPending())
-		{
-			const FVector2D From = Layout.ToScreen(FVector2D(Layout.LaneCenterX(PreviousChordNote->Lane), PreviousChordY));
-			DrawLines(Out, Layer, Geometry, {From, Center}, FLinearColor(1.0f, 1.0f, 1.0f, 0.35f), 3.0f);
-		}
-		PreviousChordNote = &Note;
-		PreviousChordY = Y;
-
-		// Neon glow, body and a highlight stripe (spec 12.4).
-		DrawCenteredBox(Out, Layer + 1, Geometry, Center, Size + FVector2D(22.0, 22.0), WithAlpha(Color, 0.07f * Alpha), AmplitudeStyle::RoundedBrush());
-		DrawCenteredBox(Out, Layer + 1, Geometry, Center, Size + FVector2D(10.0, 10.0), WithAlpha(Color, 0.22f * Alpha), AmplitudeStyle::RoundedBrush());
-		DrawCenteredBox(Out, Layer + 2, Geometry, Center, Size, WithAlpha(Color, Alpha), AmplitudeStyle::RoundedBrush());
-		DrawCenteredBox(Out, Layer + 3, Geometry, Center - FVector2D(0.0, Size.Y * 0.22), FVector2D(Size.X * 0.8, FMath::Max(2.0, Size.Y * 0.16)),
-			FLinearColor(1.0f, 1.0f, 1.0f, 0.45f * Alpha), AmplitudeStyle::RoundedBrush());
-	}
-	return Layer + 4;
-}
-
-int32 SAmplitudeGameView::PaintPowerups(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const
-{
-	const Amp::FSimulation& Simulation = Session.GetSimulation();
-	const float Size = FMath::Clamp(Layout.LaneWidth * 0.2f, 18.0f, 56.0f) * Layout.Zoom;
-	const FSlateFontInfo GlyphFont = AmplitudeStyle::Font(FMath::Max(8.0f, Size * 0.32f));
-
-	for (const Amp::FFallingPowerup& Powerup : Simulation.GetPowerups())
-	{
-		const float Y = static_cast<float>(Simulation.GetPowerupY(Powerup));
-		const FVector2D Center = Layout.ToScreen(FVector2D(Layout.LaneCenterX(Powerup.Lane), Y));
-		const FLinearColor Color = Tint(Layout, AmplitudeStyle::GetPowerupColor(Powerup.Type));
-		const float Pulse = 1.0f + 0.1f * FMath::Sin(static_cast<float>(Time) * 7.0f + Powerup.Id);
-		const float Angle = static_cast<float>(Time) * 2.2f + Powerup.Id;
-		// Fade out over the last second before despawning.
-		const float Fade = FMath::Clamp((1.0f - Y) * 8.0f, 0.0f, 1.0f);
-
-		DrawRotatedBox(Out, Layer, Geometry, Center, FVector2D(Size, Size) * 1.7f * Pulse, Angle, WithAlpha(Color, 0.18f * Fade), AmplitudeStyle::RoundedBrush());
-		DrawRotatedBox(Out, Layer + 1, Geometry, Center, FVector2D(Size, Size) * Pulse, Angle, WithAlpha(Color, Fade), AmplitudeStyle::RoundedBrush());
-		DrawRotatedBox(Out, Layer + 2, Geometry, Center, FVector2D(Size, Size) * 0.62f * Pulse, Angle, FLinearColor(0.0f, 0.0f, 0.0f, 0.55f * Fade), AmplitudeStyle::RoundedBrush());
-		PaintText(Out, Layer + 3, Geometry, AmplitudeStyle::GetPowerupGlyph(Powerup.Type), GlyphFont, Center, WithAlpha(FLinearColor::White, Fade), FVector2D(0.5, 0.5), false);
-	}
-	return Layer + 4;
-}
-
-int32 SAmplitudeGameView::PaintShip(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const
-{
-	const Amp::FSimulation& Simulation = Session.GetSimulation();
-	const int32 Lane = Simulation.GetShipLane();
-	const float EnergyFraction = static_cast<float>(Simulation.GetEnergy()) / static_cast<float>(FMath::Max(1, Simulation.GetRules().MaxEnergy));
-	const FLinearColor LaneColor = Tint(Layout, AmplitudeStyle::GetLaneColor(Lane));
-	const float Height = FMath::Clamp(static_cast<float>(Layout.Size.Y) * 0.035f, 22.0f, 64.0f) * Layout.Zoom;
-	const float Width = Height * 0.95f;
-	// Gentle bob on the beat (spec 12.3).
-	const float Bob = FMath::Sin(static_cast<float>(Session.GetBeatPhase()) * 2.0f * UE_PI) * Height * 0.06f;
-	const float ShipNorm = (Layout.ShipY - Layout.FieldTop) / Layout.FieldHeight;
-
-	auto DrawShipAt = [&](float XNorm, float Alpha, int32 ShipLayer)
-	{
-		const FVector2D Center = Layout.ToScreen(FVector2D(XNorm, ShipNorm)) + FVector2D(0.0, Bob);
-		const FVector2D Apex = Center + FVector2D(0.0, -Height * 0.55);
-		const FVector2D LeftWing = Center + FVector2D(-Width * 0.5, Height * 0.45);
-		const FVector2D RightWing = Center + FVector2D(Width * 0.5, Height * 0.45);
-		const FVector2D Notch = Center + FVector2D(0.0, Height * 0.2);
-		// Brightness follows the energy level.
-		const FLinearColor Body = WithAlpha(FMath::Lerp(FLinearColor(0.35f, 0.35f, 0.42f), FLinearColor::White, 0.3f + 0.7f * EnergyFraction), Alpha);
-		DrawFilledTriangle(Out, ShipLayer, Geometry, Apex, LeftWing, Notch, Body);
-		DrawFilledTriangle(Out, ShipLayer, Geometry, Apex, Notch, RightWing, Body);
-		DrawLines(Out, ShipLayer + 1, Geometry, {Apex, LeftWing, Notch, RightWing, Apex}, WithAlpha(LaneColor, Alpha), 2.5f);
-		return Center;
+		const FSlateFontInfo Font = AmplitudeStyle::Font(15.0f * Scale);
+		const FVector2D TextSize = MeasureText(Text, Font);
+		const FVector2D PillSize(TextSize.X + 22.0f * Scale, 30.0f * Scale);
+		DrawBox(Out, Layer + 2, Geometry, FVector2D(PillX, PillY), PillSize, Color, PillBrush());
+		PaintText(Out, Layer + 3, Geometry, Text, Font, FVector2D(PillX, PillY) + PillSize * 0.5, Ink, FVector2D(0.5, 0.5), false);
+		PillX += static_cast<float>(PillSize.X) + 8.0f * Scale;
 	};
-
-	// Energy trail when hopping lanes.
-	if (ShipTrail > 0.0f && TrailFromLane >= 0 && TrailFromLane != Lane)
+	const int32 ShipLane = Simulation.GetShipLane();
+	const double ComboMultiplier = Simulation.GetLaneComboMultiplier(ShipLane);
+	if (ComboMultiplier > 1.001)
 	{
-		constexpr int32 Ghosts = 5;
-		for (int32 Ghost = 0; Ghost < Ghosts; ++Ghost)
-		{
-			const float T = static_cast<float>(Ghost) / Ghosts;
-			const float X = FMath::Lerp(Layout.LaneCenterX(TrailFromLane), Layout.LaneCenterX(Lane), T);
-			DrawShipAt(X, ShipTrail * 0.18f * (T + 0.2f), Layer);
-		}
+		PaintPill(FString::Printf(TEXT("COMBO x%.1f"), ComboMultiplier), AmplitudeStyle::GetLaneColor(ShipLane));
 	}
-
-	const FVector2D ShipCenter = Layout.ToScreen(FVector2D(Layout.LaneCenterX(Lane), ShipNorm)) + FVector2D(0.0, Bob);
-	// Engine glow in the lane colour; hotter during Fever.
-	const FLinearColor GlowColor = Simulation.IsFeverActive() ? AmplitudeStyle::Fever : LaneColor;
-	DrawCenteredBox(Out, Layer + 2, Geometry, ShipCenter + FVector2D(0.0, Height * 0.1), FVector2D(Width * 2.2, Height * 1.6), WithAlpha(GlowColor, 0.12f), AmplitudeStyle::RoundedBrush());
-	DrawCenteredBox(Out, Layer + 2, Geometry, ShipCenter + FVector2D(0.0, Height * 0.45), FVector2D(Width * 0.35, Height * 0.35 * (0.8f + 0.4f * FMath::Frac(static_cast<float>(Time) * 9.0f))),
-		WithAlpha(GlowColor, 0.8f), AmplitudeStyle::RoundedBrush());
-	DrawShipAt(Layout.LaneCenterX(Lane), 1.0f, Layer + 3);
-
-	if (Simulation.IsShieldActive())
-	{
-		const float Pulse = 0.5f + 0.5f * FMath::Sin(static_cast<float>(Time) * 5.0f);
-		DrawCircle(Out, Layer + 5, Geometry, ShipCenter, Height * (0.95f + 0.06f * Pulse), WithAlpha(AmplitudeStyle::Shield, 0.45f + 0.35f * Pulse), 3.0f);
-	}
-	return Layer + 6;
-}
-
-int32 SAmplitudeGameView::PaintEffects(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer) const
-{
-	for (const FRing& Ring : Rings)
-	{
-		const float T = Ring.Age / Ring.Life;
-		const float Radius = Ring.MaxRadius * T * Layout.FieldWidth / Amp::NumLanes * 3.0f;
-		DrawCircle(Out, Layer, Geometry, Layout.ToScreen(Ring.Position), Radius, WithAlpha(Ring.Color, 1.0f - T), 3.0f + 3.0f * (1.0f - T));
-	}
-
-	for (const FParticle& Particle : Particles)
-	{
-		const float T = Particle.Age / Particle.Life;
-		const float Size = Particle.Size * (1.0f - 0.5f * T);
-		DrawCenteredBox(Out, Layer + 1, Geometry, Layout.ToScreen(Particle.Position), FVector2D(Size, Size), WithAlpha(Tint(Layout, Particle.Color), 1.0f - T));
-	}
-
-	for (const FPopup& Popup : Popups)
-	{
-		const float T = Popup.Age / Popup.Life;
-		const float Scale = T < 0.15f ? FMath::Lerp(1.4f, 1.0f, T / 0.15f) : 1.0f;
-		const FVector2D Position = Layout.ToScreen(Popup.Position - FVector2D(0.0, Popup.Rise * T));
-		const float FontSize = Popup.Size * Scale * FMath::Clamp(static_cast<float>(Layout.Size.Y) / 1080.0f, 0.7f, 1.6f);
-		PaintText(Out, Layer + 2, Geometry, Popup.Text, AmplitudeStyle::Font(FontSize), Position, WithAlpha(Popup.Color, FMath::Min(1.0f, (1.0f - T) * 2.0f)), FVector2D(0.5, 0.5));
-	}
-	return Layer + 4;
-}
-
-int32 SAmplitudeGameView::PaintHud(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const
-{
-	const Amp::FSimulation& Simulation = Session.GetSimulation();
-	const UAmplitudeUserSettings* Settings = UAmplitudeUserSettings::Get();
-	const bool bShowCombo = Settings == nullptr || Settings->bShowCombo;
-	const bool bShowEnergy = Settings == nullptr || Settings->bShowEnergy;
-	const bool bShowStats = Settings != nullptr && Settings->bShowPerformanceStats;
-	const float Width = static_cast<float>(Layout.Size.X);
-	const float Height = static_cast<float>(Layout.Size.Y);
-	const float Margin = Width * 0.03f;
-
-	// ---- Top bar: score, timer, energy (spec 11.2.1)
-	DrawBox(Out, Layer, Geometry, FVector2D::ZeroVector, FVector2D(Width, Layout.TopBar), FLinearColor(0.012f, 0.012f, 0.025f, 0.94f));
-	DrawBox(Out, Layer, Geometry, FVector2D(0.0, Layout.TopBar - 2.0f), FVector2D(Width, 2.0), WithAlpha(AmplitudeStyle::Accent, 0.35f));
-
-	const FSlateFontInfo BarFont = AmplitudeStyle::Font(Layout.TopBar * 0.36f);
-	const FSlateFontInfo SmallFont = AmplitudeStyle::Font(Layout.TopBar * 0.28f);
-	const float BarMid = Layout.TopBar * 0.5f;
-
-	const FString ScoreText = FString::Printf(TEXT("SCORE  %s"), *AmplitudeStyle::FormatScore(Simulation.GetScore()).ToString());
-	PaintText(Out, Layer + 1, Geometry, ScoreText, BarFont, FVector2D(Margin, BarMid), AmplitudeStyle::Text, FVector2D(0.0, 0.5));
 	const double GlobalMultiplier = Simulation.GetGlobalMultiplier();
 	if (GlobalMultiplier > 1.001)
 	{
-		const FVector2D ScoreSize = MeasureText(ScoreText, BarFont);
-		PaintText(Out, Layer + 1, Geometry, FString::Printf(TEXT("x%.1f"), GlobalMultiplier), BarFont,
-			FVector2D(Margin + ScoreSize.X + 16.0, BarMid), AmplitudeStyle::Perfect, FVector2D(0.0, 0.5));
+		PaintPill(FString::Printf(TEXT("BOOST x%.1f"), GlobalMultiplier), AmplitudeStyle::Perfect);
 	}
 
-	const FString TimeText = FString::Printf(TEXT("TIME  %s / %s"),
-		*AmplitudeStyle::FormatTime(FMath::Max(0.0, Session.GetSongTimeMs())).ToString(), *AmplitudeStyle::FormatTime(Session.GetDisplayDurationMs()).ToString());
-	PaintText(Out, Layer + 1, Geometry, TimeText, BarFont, FVector2D(Width * 0.5f, BarMid), AmplitudeStyle::Text, FVector2D(0.5, 0.5));
+	if (Settings != nullptr && Settings->bShowPerformanceStats)
+	{
+		PaintText(Out, Layer, Geometry, FString::Printf(TEXT("FPS %.0f   SYNC %+.1f ms   RESYNCS %d   INPUT %.0f ms"),
+			SmoothedFps, Session.GetAudioDriftMs(), Session.GetResyncCount(), Session.GetInputLatencyMs()),
+			AmplitudeStyle::Font(12.0f * Scale, false), FVector2D(Margin, ScoreAnchor.Y + ScoreSize.Y + 6.0f * Scale), AmplitudeStyle::TextDim);
+	}
 
-	if (bShowEnergy)
+	// ---- Song and progress (top centre)
+	const FAmplitudeSongDefinition& Song = Session.GetSong();
+	const FString Title = Song.Artist.IsEmpty() ? Song.Title.ToUpper() : FString::Printf(TEXT("%s  -  %s"), *Song.Title.ToUpper(), *Song.Artist.ToUpper());
+	PaintText(Out, Layer, Geometry, Title, AmplitudeStyle::Font(14.0f * Scale), FVector2D(Size.X * 0.5, Margin), AmplitudeStyle::Text, FVector2D(0.5, 0.0));
+	const FVector2D BarSize(Size.X * 0.26, 6.0f * Scale);
+	const FVector2D BarPosition(Size.X * 0.5 - BarSize.X * 0.5, Margin + 28.0f * Scale);
+	const double Duration = FMath::Max(1.0, Session.GetDisplayDurationMs());
+	const float Progress = static_cast<float>(FMath::Clamp(Session.GetSongTimeMs() / Duration, 0.0, 1.0));
+	DrawBox(Out, Layer, Geometry, BarPosition, BarSize, FLinearColor(1.0f, 1.0f, 1.0f, 0.2f), PillBrush());
+	DrawBox(Out, Layer + 1, Geometry, BarPosition, FVector2D(BarSize.X * Progress, BarSize.Y), AmplitudeStyle::Accent, PillBrush());
+	const FString TimeText = FString::Printf(TEXT("%s / %s"),
+		*AmplitudeStyle::FormatTime(FMath::Max(0.0, Session.GetSongTimeMs())).ToString(), *AmplitudeStyle::FormatTime(Duration).ToString());
+	PaintText(Out, Layer, Geometry, TimeText, AmplitudeStyle::Font(12.0f * Scale, false), FVector2D(Size.X * 0.5, BarPosition.Y + 12.0f * Scale), AmplitudeStyle::TextDim, FVector2D(0.5, 0.0));
+
+	// ---- Energy (top right)
+	if (Settings == nullptr || Settings->bShowEnergy)
 	{
 		const int32 Energy = Simulation.GetEnergy();
 		const float Fraction = static_cast<float>(Energy) / static_cast<float>(FMath::Max(1, Simulation.GetRules().MaxEnergy));
 		const bool bLow = Simulation.IsEnergyLow();
 		const float Flash = bLow ? 0.5f + 0.5f * FMath::Sin(static_cast<float>(Time) * 12.0f) : 1.0f;
-		const FLinearColor EnergyColor = WithAlpha(AmplitudeStyle::GetEnergyColor(Fraction), bLow ? 0.35f + 0.65f * Flash : 1.0f);
-		const FVector2D BarSize(Width * 0.18f, Layout.TopBar * 0.3f);
-		const FVector2D BarPosition(Width - Margin - BarSize.X, BarMid - BarSize.Y * 0.5f);
-		DrawBox(Out, Layer + 1, Geometry, BarPosition, BarSize, FLinearColor(1.0f, 1.0f, 1.0f, 0.08f), AmplitudeStyle::RoundedBrush());
-		DrawBox(Out, Layer + 2, Geometry, BarPosition, FVector2D(BarSize.X * Fraction, BarSize.Y), EnergyColor, AmplitudeStyle::RoundedBrush());
-		PaintText(Out, Layer + 1, Geometry, FString::Printf(TEXT("ENERGY  %d/%d"), Energy, Simulation.GetRules().MaxEnergy), BarFont,
-			FVector2D(BarPosition.X - 16.0f, BarMid), bLow ? EnergyColor : AmplitudeStyle::Text, FVector2D(1.0, 0.5));
+		const FLinearColor EnergyColor = WithAlpha(AmplitudeStyle::GetEnergyColor(Fraction), bLow ? 0.4f + 0.6f * Flash : 1.0f);
+		const FVector2D EnergySize(280.0f * Scale, 14.0f * Scale);
+		const FVector2D EnergyPosition(Size.X - Margin - EnergySize.X, Margin + 26.0f * Scale);
+		PaintText(Out, Layer, Geometry, TEXT("ENERGY"), AmplitudeStyle::Font(13.0f * Scale), FVector2D(EnergyPosition.X, Margin), AmplitudeStyle::TextDim);
+		PaintText(Out, Layer, Geometry, FString::FromInt(Energy), AmplitudeStyle::Font(16.0f * Scale), FVector2D(Size.X - Margin, Margin - 2.0f * Scale),
+			bLow ? EnergyColor : AmplitudeStyle::Text, FVector2D(1.0, 0.0));
+		DrawBox(Out, Layer, Geometry, EnergyPosition, EnergySize, FLinearColor(1.0f, 1.0f, 1.0f, 0.2f), PillBrush());
+		DrawBox(Out, Layer + 1, Geometry, EnergyPosition, FVector2D(EnergySize.X * Fraction, EnergySize.Y), EnergyColor, PillBrush());
+		if (!Session.HasAudio())
+		{
+			PaintText(Out, Layer, Geometry, TEXT("NO AUDIO"), AmplitudeStyle::Font(12.0f * Scale), FVector2D(Size.X - Margin, EnergyPosition.Y + 24.0f * Scale), AmplitudeStyle::TextDim, FVector2D(1.0, 0.0));
+		}
 	}
+	return Layer + 4;
+}
 
-	// ---- Bottom bar: combo, lane status, powerups, debug (spec 11.2.3 / 11.2.4)
-	const float BottomTop = Height - Layout.BottomBar;
-	DrawBox(Out, Layer, Geometry, FVector2D(0.0, BottomTop), FVector2D(Width, Layout.BottomBar), FLinearColor(0.012f, 0.012f, 0.025f, 0.94f));
-	DrawBox(Out, Layer, Geometry, FVector2D(0.0, BottomTop), FVector2D(Width, 2.0), WithAlpha(AmplitudeStyle::Accent, 0.35f));
+int32 SAmplitudeGameView::PaintLaneStrip(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const
+{
+	const Amp::FSimulation& Simulation = Session.GetSimulation();
+	const UAmplitudeUserSettings* Settings = UAmplitudeUserSettings::Get();
+	const bool bShowCombo = Settings == nullptr || Settings->bShowCombo;
+	const FVector2D Size(Geometry.GetLocalSize());
+	const float Margin = 30.0f * Scale;
+	const float PillWidth = 136.0f * Scale;
+	const float PillHeight = 48.0f * Scale;
+	const float Gap = 10.0f * Scale;
+	const float TotalWidth = PillWidth * Amp::NumLanes + Gap * (Amp::NumLanes - 1);
+	const float Left = static_cast<float>(Size.X) * 0.5f - TotalWidth * 0.5f;
+	const float Top = static_cast<float>(Size.Y) - Margin - PillHeight - 12.0f * Scale;
+	const int32 ShipLane = Simulation.GetShipLane();
+	const int32 CaptureStreak = FMath::Max(1, Simulation.GetRules().CaptureStreak);
 
-	const FSlateFontInfo CellFont = AmplitudeStyle::Font(FMath::Clamp(Layout.LaneWidth * 0.07f, 10.0f, 17.0f));
-	const float RowOne = BottomTop + Layout.BottomBar * 0.28f;
-	const float RowTwo = BottomTop + Layout.BottomBar * 0.68f;
 	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
 	{
 		const Amp::FLaneState& State = Simulation.GetLane(Lane);
-		const float CenterX = Layout.FieldLeft + Layout.LaneWidth * (Lane + 0.5f);
 		const FLinearColor LaneColor = AmplitudeStyle::GetLaneColor(Lane);
-		FString Status;
-		FLinearColor StatusColor = AmplitudeStyle::TextDim;
+		const bool bShip = Lane == ShipLane;
+		const FVector2D Position(Left + Lane * (PillWidth + Gap), Top - (bShip ? 6.0f * Scale : 0.0f));
+		const FVector2D PillSize(PillWidth, PillHeight);
+
+		FLinearColor Fill = WithAlpha(FMath::Lerp(Ink, LaneColor, 0.35f), 0.78f);
 		if (State.bCaptured)
 		{
-			Status = FString::Printf(TEXT("CAPTURED (%s)"), *Seconds(Simulation.GetCaptureRemainingMs(Lane)));
-			StatusColor = LaneColor;
+			Fill = WithAlpha(LaneColor, 0.92f);
 		}
 		else if (State.bMuted)
 		{
-			Status = FString::Printf(TEXT("MUTED  x%d"), State.ConsecutiveMisses);
-			StatusColor = AmplitudeStyle::Miss;
+			Fill = FLinearColor(0.2f, 0.2f, 0.24f, 0.8f);
 		}
-		else if (State.ConsecutiveMisses > 0)
+		DrawBox(Out, Layer, Geometry, Position, PillSize, Fill, PillBrush());
+		if (bShip)
 		{
-			Status = FString::Printf(TEXT("MISS x%d"), State.ConsecutiveMisses);
-			StatusColor = AmplitudeStyle::Fever;
+			DrawBox(Out, Layer + 1, Geometry, Position, PillSize, FLinearColor::White, OutlineBrush());
+			DrawBox(Out, Layer + 1, Geometry, Position + FVector2D(PillWidth * 0.5f - 14.0f * Scale, -10.0f * Scale), FVector2D(28.0f * Scale, 4.0f * Scale), FLinearColor::White, PillBrush());
 		}
-		else
-		{
-			Status = FString::Printf(TEXT("%d HITS"), State.Hits);
-		}
-		if (bShowCombo && State.Combo > 0)
-		{
-			Status += FString::Printf(TEXT("  x%d"), State.Combo);
-		}
-		PaintText(Out, Layer + 1, Geometry, FString::Printf(TEXT("LANE %d"), Lane + 1), CellFont, FVector2D(CenterX, RowOne - 9.0f), WithAlpha(LaneColor, 0.8f), FVector2D(0.5, 1.0));
-		PaintText(Out, Layer + 1, Geometry, Status, CellFont, FVector2D(CenterX, RowOne - 7.0f), StatusColor, FVector2D(0.5, 0.0));
-	}
 
-	const FSlateFontInfo RowFont = AmplitudeStyle::Font(FMath::Clamp(Height * 0.021f, 11.0f, 22.0f));
-	float Cursor = Margin;
-	if (bShowCombo)
-	{
-		const int32 ShipLane = Simulation.GetShipLane();
-		const FString ComboText = FString::Printf(TEXT("COMBO: %d (%.1fx)"), Simulation.GetLane(ShipLane).Combo, Simulation.GetLaneComboMultiplier(ShipLane));
-		PaintText(Out, Layer + 1, Geometry, ComboText, RowFont, FVector2D(Cursor, RowTwo), AmplitudeStyle::GetLaneColor(ShipLane), FVector2D(0.0, 0.5));
-		Cursor += static_cast<float>(MeasureText(ComboText, RowFont).X) + 36.0f;
-	}
+		const FLinearColor TextColor = State.bCaptured ? Ink : AmplitudeStyle::Text;
+		PaintText(Out, Layer + 2, Geometry, AmplitudeStyle::GetLaneLabel(Lane).ToString(), AmplitudeStyle::Font(14.0f * Scale),
+			Position + FVector2D(PillWidth * 0.5f, 8.0f * Scale), TextColor, FVector2D(0.5, 0.0), !State.bCaptured);
 
-	TArray<TPair<FString, FLinearColor>> Effects;
+		FString Status;
+		if (State.bCaptured)
+		{
+			Status = FString::Printf(TEXT("AUTO  %s"), *Seconds(Simulation.GetCaptureRemainingMs(Lane)));
+		}
+		else if (State.bMuted)
+		{
+			Status = TEXT("MUTED");
+		}
+		else if (bShowCombo && State.Combo > 0)
+		{
+			Status = FString::Printf(TEXT("x%d  (%.1fx)"), State.Combo, Simulation.GetLaneComboMultiplier(Lane));
+		}
+		PaintText(Out, Layer + 2, Geometry, Status, AmplitudeStyle::Font(11.0f * Scale, false),
+			Position + FVector2D(PillWidth * 0.5f, 28.0f * Scale), State.bCaptured ? Ink : (State.bMuted ? AmplitudeStyle::Miss : AmplitudeStyle::TextDim), FVector2D(0.5, 0.0), false);
+
+		// Progress towards capture, or the time left on it.
+		const FVector2D TrackPosition = Position + FVector2D(10.0f * Scale, PillHeight + 5.0f * Scale);
+		const FVector2D TrackSize(PillWidth - 20.0f * Scale, 4.0f * Scale);
+		const float Fraction = State.bCaptured
+			? static_cast<float>(Simulation.GetCaptureRemainingMs(Lane) / FMath::Max(1.0, Simulation.GetRules().CaptureDurationMs))
+			: static_cast<float>(State.CaptureStreak) / static_cast<float>(CaptureStreak);
+		DrawBox(Out, Layer, Geometry, TrackPosition, TrackSize, FLinearColor(1.0f, 1.0f, 1.0f, 0.18f), PillBrush());
+		DrawBox(Out, Layer + 1, Geometry, TrackPosition, FVector2D(TrackSize.X * FMath::Clamp(Fraction, 0.0f, 1.0f), TrackSize.Y), LaneColor, PillBrush());
+	}
+	return Layer + 4;
+}
+
+int32 SAmplitudeGameView::PaintPowerups(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const
+{
+	const Amp::FSimulation& Simulation = Session.GetSimulation();
+	const Amp::FGameRules& Rules = Simulation.GetRules();
 	const Amp::FActiveEffects& Active = Simulation.GetEffects();
+	const FVector2D Size(Geometry.GetLocalSize());
+	const float Margin = 30.0f * Scale;
+
+	struct FChip
+	{
+		FString Text;
+		FLinearColor Color;
+		float Fraction;
+	};
+	TArray<FChip> Chips;
+	auto Fraction = [](double Remaining, double Total)
+	{
+		return static_cast<float>(FMath::Clamp(Remaining / FMath::Max(1.0, Total), 0.0, 1.0));
+	};
+
 	if (!Active.Score2xRemainingMs.empty())
 	{
 		const double Longest = *std::max_element(Active.Score2xRemainingMs.begin(), Active.Score2xRemainingMs.end());
 		const int32 Stacks = Simulation.GetScore2xStacks();
-		Effects.Emplace(Stacks > 1 ? FString::Printf(TEXT("SCORE %dX (%s)"), 1 << Stacks, *Seconds(Longest)) : FString::Printf(TEXT("SCORE 2X (%s)"), *Seconds(Longest)),
-			AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::Score2x));
+		Chips.Add({FString::Printf(TEXT("SCORE %dX  %s"), 1 << Stacks, *Seconds(Longest)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::Score2x), Fraction(Longest, Rules.Score2xDurationMs)});
 	}
 	if (Simulation.IsFeverActive())
 	{
-		Effects.Emplace(FString::Printf(TEXT("FEVER MODE %.1fx (%s)"), Active.FeverMultiplier, *Seconds(Active.FeverRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::Fever));
+		Chips.Add({FString::Printf(TEXT("FEVER %.1fx  %s"), Active.FeverMultiplier, *Seconds(Active.FeverRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::Fever), Fraction(Active.FeverRemainingMs, Rules.FeverDurationMs)});
 	}
 	if (Simulation.IsShieldActive())
 	{
-		Effects.Emplace(FString::Printf(TEXT("SHIELD (%s)"), *Seconds(Active.ShieldRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::Shield));
+		Chips.Add({FString::Printf(TEXT("SHIELD  %s"), *Seconds(Active.ShieldRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::Shield), Fraction(Active.ShieldRemainingMs, Rules.ShieldDurationMs)});
 	}
 	if (Simulation.IsSlowMotionActive())
 	{
-		Effects.Emplace(FString::Printf(TEXT("SLOW-MO (%s)"), *Seconds(Active.SlowMotionRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::SlowMotion));
+		Chips.Add({FString::Printf(TEXT("SLOW-MO  %s"), *Seconds(Active.SlowMotionRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::SlowMotion), Fraction(Active.SlowMotionRemainingMs, Rules.SlowMotionDurationMs)});
 	}
 	if (Simulation.IsLaneCleanerArmed())
 	{
-		Effects.Emplace(FString::Printf(TEXT("LANE CLEANER: PICK A LANE (%s)"), *Seconds(Active.LaneCleanerRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::LaneCleaner));
-	}
-	if (Effects.Num() > 0)
-	{
-		PaintText(Out, Layer + 1, Geometry, TEXT("POWERUP:"), RowFont, FVector2D(Cursor, RowTwo), AmplitudeStyle::TextDim, FVector2D(0.0, 0.5));
-		Cursor += static_cast<float>(MeasureText(TEXT("POWERUP:"), RowFont).X) + 12.0f;
-		for (const TPair<FString, FLinearColor>& Effect : Effects)
-		{
-			PaintText(Out, Layer + 1, Geometry, Effect.Key, RowFont, FVector2D(Cursor, RowTwo), Effect.Value, FVector2D(0.0, 0.5));
-			Cursor += static_cast<float>(MeasureText(Effect.Key, RowFont).X) + 24.0f;
-		}
+		Chips.Add({FString::Printf(TEXT("LANE CLEANER  %s"), *Seconds(Active.LaneCleanerRemainingMs)), AmplitudeStyle::GetPowerupColor(Amp::EPowerupType::LaneCleaner), Fraction(Active.LaneCleanerRemainingMs, Rules.LaneCleanerSelectTimeoutMs)});
 	}
 
-	FString RightText;
-	if (!Session.HasAudio())
+	// Stacked upwards from the bottom-left corner.
+	const FSlateFontInfo Font = AmplitudeStyle::Font(14.0f * Scale);
+	float Bottom = static_cast<float>(Size.Y) - Margin;
+	for (const FChip& Chip : Chips)
 	{
-		RightText = TEXT("NO AUDIO  ");
-	}
-	if (bShowStats)
-	{
-		RightText += FString::Printf(TEXT("FPS: %.0f   SYNC: %+.1f ms   RESYNCS: %d   INPUT: %.0f ms"),
-			SmoothedFps, Session.GetAudioDriftMs(), Session.GetResyncCount(), Session.GetInputLatencyMs());
-	}
-	if (!RightText.IsEmpty())
-	{
-		PaintText(Out, Layer + 1, Geometry, RightText, AmplitudeStyle::Font(FMath::Clamp(Height * 0.016f, 10.0f, 16.0f)),
-			FVector2D(Width - Margin, RowTwo), AmplitudeStyle::TextDim, FVector2D(1.0, 0.5));
+		const FVector2D TextSize = MeasureText(Chip.Text, Font);
+		const FVector2D ChipSize(TextSize.X + 28.0f * Scale, 34.0f * Scale);
+		const FVector2D Position(Margin, Bottom - ChipSize.Y);
+		DrawBox(Out, Layer, Geometry, Position, ChipSize, WithAlpha(Chip.Color, 0.92f), PillBrush());
+		DrawBox(Out, Layer + 1, Geometry, Position + FVector2D(10.0f * Scale, ChipSize.Y - 7.0f * Scale), FVector2D((ChipSize.X - 20.0f * Scale) * Chip.Fraction, 3.0f * Scale), WithAlpha(Ink, 0.6f), PillBrush());
+		PaintText(Out, Layer + 1, Geometry, Chip.Text, Font, Position + FVector2D(ChipSize.X * 0.5, ChipSize.Y * 0.45), Ink, FVector2D(0.5, 0.5), false);
+		Bottom -= static_cast<float>(ChipSize.Y) + 8.0f * Scale;
 	}
 	return Layer + 3;
 }
 
-int32 SAmplitudeGameView::PaintCenterMessages(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const
+int32 SAmplitudeGameView::PaintPrompts(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const
+{
+	const UAmplitudeUserSettings* Settings = UAmplitudeUserSettings::Get();
+	const AAmplitudeDirector* Owner = Director.Get();
+	if (Settings == nullptr || Owner == nullptr)
+	{
+		return Layer;
+	}
+	// Full strength while the player learns the song's opening, then they step back.
+	const double SongTimeMs = Session.GetSongTimeMs();
+	const float Alpha = SongTimeMs < 12000.0 ? 1.0f : 0.45f;
+	const bool bGamepad = Owner->IsUsingGamepad();
+	const FAmplitudeControlProfile& Profile = Settings->GetActiveProfile();
+	const FVector2D Size(Geometry.GetLocalSize());
+	const float Margin = 30.0f * Scale;
+	const FSlateFontInfo LabelFont = AmplitudeStyle::Font(11.0f * Scale);
+
+	auto KeyText = [&Profile, bGamepad](int32 Action)
+	{
+		return AmplitudeStyle::GetKeyLabel(Profile.GetDisplayKey(Action, bGamepad)).ToString();
+	};
+
+	// Measure right to left so the block hugs the bottom-right corner.
+	const FString Labels[5] = {KeyText(AmplitudeControls::MoveLeft), KeyText(AmplitudeControls::MoveRight),
+		KeyText(AmplitudeControls::GemLeft), KeyText(AmplitudeControls::GemMiddle), KeyText(AmplitudeControls::GemRight)};
+	const FSlateFontInfo KeyFont = AmplitudeStyle::Font(14.0f * Scale);
+	float Width = 0.0f;
+	float Widths[5];
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		Widths[Index] = FMath::Max(40.0f * Scale, static_cast<float>(MeasureText(Labels[Index], KeyFont).X) + 20.0f * Scale);
+		Width += Widths[Index] + 6.0f * Scale;
+	}
+	const float GroupGap = 18.0f * Scale;
+	Width += GroupGap;
+
+	float X = static_cast<float>(Size.X) - Margin - Width;
+	const float Y = static_cast<float>(Size.Y) - Margin - 40.0f * Scale;
+	PaintText(Out, Layer, Geometry, TEXT("MOVE"), LabelFont, FVector2D(X, Y - 18.0f * Scale), WithAlpha(AmplitudeStyle::TextDim, Alpha));
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		if (Index == 2)
+		{
+			X += GroupGap;
+			PaintText(Out, Layer, Geometry, TEXT("FIRE"), LabelFont, FVector2D(X, Y - 18.0f * Scale), WithAlpha(AmplitudeStyle::TextDim, Alpha));
+		}
+		const FLinearColor Tint = Index < 2 ? AmplitudeStyle::TextDim : AmplitudeStyle::GetColumnColor(Index - 2);
+		X += PaintKeycap(Out, Layer, Geometry, FVector2D(X, Y), Labels[Index], Tint, Scale, Alpha) + 6.0f * Scale;
+	}
+	return Layer + 3;
+}
+
+int32 SAmplitudeGameView::PaintPopups(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, float Scale) const
+{
+	const FVector2D Size(Geometry.GetLocalSize());
+	for (const FPopup& Popup : Popups)
+	{
+		FVector2D Anchor;
+		if (!ProjectToLocal(Popup.WorldLocation, Size, Anchor))
+		{
+			continue;
+		}
+		const float T = Popup.Age / Popup.Life;
+		const float Pop = T < 0.15f ? FMath::Lerp(1.35f, 1.0f, T / 0.15f) : 1.0f;
+		const FVector2D Position = Anchor + (Popup.Offset + FVector2D(0.0, -40.0 * T)) * Scale;
+		const float Alpha = FMath::Min(1.0f, (1.0f - T) * 2.5f);
+		PaintText(Out, Layer, Geometry, Popup.Text, AmplitudeStyle::Font(Popup.Size * Scale * Pop), Position, WithAlpha(Popup.Color, Alpha), FVector2D(0.5, 0.5));
+	}
+	return Layer + 2;
+}
+
+int32 SAmplitudeGameView::PaintCenterMessages(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const
 {
 	const Amp::FSimulation& Simulation = Session.GetSimulation();
-	const float Height = static_cast<float>(Layout.Size.Y);
-	const FVector2D Center(Layout.Size.X * 0.5, Layout.FieldTop + Layout.FieldHeight * 0.42f);
-	const FSlateFontInfo HugeFont = AmplitudeStyle::Font(FMath::Clamp(Height * 0.09f, 36.0f, 120.0f));
-	const FSlateFontInfo BigFont = AmplitudeStyle::Font(FMath::Clamp(Height * 0.045f, 20.0f, 64.0f));
-	const FSlateFontInfo MediumFont = AmplitudeStyle::Font(FMath::Clamp(Height * 0.024f, 14.0f, 30.0f));
+	const FVector2D Size(Geometry.GetLocalSize());
+	const FVector2D Center(Size.X * 0.5, Size.Y * 0.36);
+	const FSlateFontInfo HugeFont = AmplitudeStyle::Font(110.0f * Scale);
+	const FSlateFontInfo BigFont = AmplitudeStyle::Font(52.0f * Scale);
+	const FSlateFontInfo MediumFont = AmplitudeStyle::Font(24.0f * Scale);
 
 	const AAmplitudeDirector* Owner = Director.Get();
 	const double ResumeCountdown = Owner != nullptr ? Owner->GetResumeCountdownSeconds() : 0.0;
@@ -1024,20 +648,20 @@ int32 SAmplitudeGameView::PaintCenterMessages(const FLayout& Layout, const FGeom
 	if (ResumeCountdown > 0.0)
 	{
 		const int32 Step = FMath::CeilToInt32(ResumeCountdown / 0.4);
-		DrawBox(Out, Layer, Geometry, FVector2D::ZeroVector, Layout.Size, FLinearColor(0.0f, 0.0f, 0.0f, 0.35f));
+		DrawBox(Out, Layer, Geometry, FVector2D::ZeroVector, Size, FLinearColor(0.0f, 0.0f, 0.05f, 0.3f));
 		PaintText(Out, Layer + 1, Geometry, FString::FromInt(Step), HugeFont, Center, AmplitudeStyle::Accent, FVector2D(0.5, 0.5));
 	}
 	else if (SongTimeMs < 0.0)
 	{
 		// Lead-in: song title, then a 3-2-1 count into the first beat.
 		const FAmplitudeSongDefinition& Song = Session.GetSong();
-		const FString Title = Song.Artist.IsEmpty() ? Song.Title : FString::Printf(TEXT("%s - %s"), *Song.Title, *Song.Artist);
-		PaintText(Out, Layer + 1, Geometry, Title, BigFont, Center - FVector2D(0.0, Height * 0.1f), AmplitudeStyle::Text, FVector2D(0.5, 0.5));
-		PaintText(Out, Layer + 1, Geometry, FString(ANSI_TO_TCHAR(Amp::GetDifficultyName(Session.GetDifficulty()))).ToUpper(), MediumFont,
-			Center - FVector2D(0.0, Height * 0.05f), AmplitudeStyle::GetDifficultyColor(Session.GetDifficulty()), FVector2D(0.5, 0.5));
+		PaintText(Out, Layer + 1, Geometry, Song.Title.ToUpper(), BigFont, Center - FVector2D(0.0, 80.0 * Scale), AmplitudeStyle::Text, FVector2D(0.5, 0.5));
+		const FString Subtitle = FString::Printf(TEXT("%s%s"), Song.Artist.IsEmpty() ? TEXT("") : *(Song.Artist.ToUpper() + TEXT("   ")),
+			*FString(ANSI_TO_TCHAR(Amp::GetDifficultyName(Session.GetDifficulty()))).ToUpper());
+		PaintText(Out, Layer + 1, Geometry, Subtitle, MediumFont, Center - FVector2D(0.0, 30.0 * Scale), AmplitudeStyle::GetDifficultyColor(Session.GetDifficulty()), FVector2D(0.5, 0.5));
 		const int32 Count = FMath::CeilToInt32(-SongTimeMs / 1000.0);
 		const FString CountText = Count <= 3 ? FString::FromInt(Count) : FString(TEXT("GET READY"));
-		PaintText(Out, Layer + 1, Geometry, CountText, Count <= 3 ? HugeFont : BigFont, Center + FVector2D(0.0, Height * 0.05f), AmplitudeStyle::Accent, FVector2D(0.5, 0.5));
+		PaintText(Out, Layer + 1, Geometry, CountText, Count <= 3 ? HugeFont : BigFont, Center + FVector2D(0.0, 60.0 * Scale), AmplitudeStyle::Accent, FVector2D(0.5, 0.5));
 	}
 	else if (SongTimeMs < 600.0 && !Simulation.IsFinished())
 	{
@@ -1048,14 +672,13 @@ int32 SAmplitudeGameView::PaintCenterMessages(const FLayout& Layout, const FGeom
 	{
 		const float T = Banner.Age / Banner.Life;
 		const float Alpha = FMath::Min(1.0f, FMath::Min(Banner.Age * 8.0f, (1.0f - T) * 4.0f));
-		const float Scale = Banner.Age < 0.12f ? FMath::Lerp(1.3f, 1.0f, Banner.Age / 0.12f) : 1.0f;
-		const FSlateFontInfo Font = AmplitudeStyle::Font(FMath::Clamp(Height * 0.05f, 22.0f, 72.0f) * Scale);
-		PaintText(Out, Layer + 2, Geometry, Banner.Text, Font, FVector2D(Center.X, Layout.FieldTop + Layout.FieldHeight * 0.22f), WithAlpha(Banner.Color, Alpha), FVector2D(0.5, 0.5));
+		const float Pop = Banner.Age < 0.12f ? FMath::Lerp(1.3f, 1.0f, Banner.Age / 0.12f) : 1.0f;
+		PaintText(Out, Layer + 2, Geometry, Banner.Text, AmplitudeStyle::Font(46.0f * Scale * Pop), FVector2D(Center.X, Size.Y * 0.24), WithAlpha(Banner.Color, Alpha), FVector2D(0.5, 0.5));
 	}
 
 	if (Simulation.IsFinished())
 	{
-		DrawBox(Out, Layer, Geometry, FVector2D::ZeroVector, Layout.Size, FLinearColor(0.0f, 0.0f, 0.0f, 0.3f));
+		DrawBox(Out, Layer, Geometry, FVector2D::ZeroVector, Size, FLinearColor(0.0f, 0.0f, 0.05f, 0.25f));
 	}
 	return Layer + 4;
 }

@@ -519,7 +519,7 @@ TSharedRef<SWidget> SAmplitudeSettingsScreen::MakeControlsGrid()
 {
 	constexpr float LabelWidth = 190.0f;
 	constexpr float CellWidth = 200.0f;
-	const FText SlotNames[AmplitudeControls::NumSlots] = {LOCTEXT("Primary", "PRIMARY"), LOCTEXT("Alt1", "ALT 1"), LOCTEXT("Alt2", "ALT 2"), LOCTEXT("GamepadSlot", "GAMEPAD")};
+	const FText SlotNames[AmplitudeControls::NumSlots] = {LOCTEXT("Primary", "PRIMARY"), LOCTEXT("Alternate", "ALTERNATE"), LOCTEXT("GamepadSlot", "GAMEPAD")};
 
 	TSharedRef<SVerticalBox> Grid = SNew(SVerticalBox);
 
@@ -545,13 +545,10 @@ TSharedRef<SWidget> SAmplitudeSettingsScreen::MakeControlsGrid()
 	}
 	Grid->AddSlot().AutoHeight().Padding(18.0f, 10.0f, 0.0f, 6.0f)[Header];
 
-	for (int32 Row = 0; Row <= Amp::NumLanes; ++Row)
+	for (int32 Action = 0; Action < AmplitudeControls::NumActions; ++Action)
 	{
-		const bool bPauseRow = Row == Amp::NumLanes;
-		const FText RowLabel = bPauseRow
-			? LOCTEXT("Pause", "PAUSE")
-			: FText::FromString(FString::Printf(TEXT("%d  %s"), Row + 1, *AmplitudeStyle::GetLaneLabel(Row).ToString()));
-		const FLinearColor RowColor = bPauseRow ? AmplitudeStyle::Text : AmplitudeStyle::GetLaneColor(Row);
+		const bool bGemRow = Action >= AmplitudeControls::GemLeft && Action <= AmplitudeControls::GemRight;
+		const FLinearColor RowColor = bGemRow ? AmplitudeStyle::GetColumnColor(Action - AmplitudeControls::GemLeft) : AmplitudeStyle::Text;
 
 		TSharedRef<SHorizontalBox> Line = SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot()
@@ -561,7 +558,7 @@ TSharedRef<SWidget> SAmplitudeSettingsScreen::MakeControlsGrid()
 				SNew(SBox)
 				.WidthOverride(LabelWidth)
 				[
-					AmplitudeUI::MakeText(RowLabel, 16.0f, RowColor, true)
+					AmplitudeUI::MakeText(AmplitudeControls::GetActionName(Action).ToUpper(), 16.0f, RowColor, true)
 				]
 			];
 		for (int32 SlotIndex = 0; SlotIndex < AmplitudeControls::NumSlots; ++SlotIndex)
@@ -574,25 +571,14 @@ TSharedRef<SWidget> SAmplitudeSettingsScreen::MakeControlsGrid()
 				SNew(SAmplitudeKeyBinder)
 				.Width(CellWidth)
 				.bGamepad(bGamepadSlot)
-				.Key_Lambda([Row, SlotIndex, bPauseRow]()
+				.Key_Lambda([Action, SlotIndex]()
 				{
 					const UAmplitudeUserSettings* Settings = GetSettings();
-					if (Settings == nullptr)
-					{
-						return EKeys::Invalid;
-					}
-					return bPauseRow ? Settings->GetActiveProfile().GetPauseKey(SlotIndex) : Settings->GetActiveProfile().GetLaneKey(Row, SlotIndex);
+					return Settings != nullptr ? Settings->GetActiveProfile().GetKey(Action, SlotIndex) : EKeys::Invalid;
 				})
-				.OnKeyChosen_Lambda([this, Row, SlotIndex, bPauseRow](FKey Key)
+				.OnKeyChosen_Lambda([this, Action, SlotIndex](FKey Key)
 				{
-					if (bPauseRow)
-					{
-						BindPauseKey(SlotIndex, Key);
-					}
-					else
-					{
-						BindLaneKey(Row, SlotIndex, Key);
-					}
+					BindKey(Action, SlotIndex, Key);
 				})
 			];
 		}
@@ -665,7 +651,7 @@ void SAmplitudeSettingsScreen::ApplyGraphics()
 
 void SAmplitudeSettingsScreen::RemoveKeyEverywhere(FAmplitudeControlProfile& Profile, const FKey& Key)
 {
-	for (FAmplitudeLaneBinding& Binding : Profile.Lanes)
+	for (FAmplitudeActionBinding& Binding : Profile.Actions)
 	{
 		for (FKey& Bound : Binding.Keys)
 		{
@@ -675,16 +661,9 @@ void SAmplitudeSettingsScreen::RemoveKeyEverywhere(FAmplitudeControlProfile& Pro
 			}
 		}
 	}
-	for (FKey& Bound : Profile.PauseKeys)
-	{
-		if (Bound == Key)
-		{
-			Bound = EKeys::Invalid;
-		}
-	}
 }
 
-void SAmplitudeSettingsScreen::BindLaneKey(int32 Lane, int32 Slot, const FKey& Key)
+void SAmplitudeSettingsScreen::BindKey(int32 Action, int32 Slot, const FKey& Key)
 {
 	if (UAmplitudeUserSettings* Settings = GetSettings())
 	{
@@ -693,21 +672,7 @@ void SAmplitudeSettingsScreen::BindLaneKey(int32 Lane, int32 Slot, const FKey& K
 		{
 			RemoveKeyEverywhere(Profile, Key);
 		}
-		Profile.SetLaneKey(Lane, Slot, Key);
-		OnControlsChanged();
-	}
-}
-
-void SAmplitudeSettingsScreen::BindPauseKey(int32 Slot, const FKey& Key)
-{
-	if (UAmplitudeUserSettings* Settings = GetSettings())
-	{
-		FAmplitudeControlProfile& Profile = Settings->GetMutableActiveProfile();
-		if (Key.IsValid())
-		{
-			RemoveKeyEverywhere(Profile, Key);
-		}
-		Profile.SetPauseKey(Slot, Key);
+		Profile.SetKey(Action, Slot, Key);
 		OnControlsChanged();
 	}
 }

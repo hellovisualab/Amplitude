@@ -48,7 +48,9 @@ namespace Amp
 
 		Score = 0;
 		Energy = std::clamp(Rules.StartingEnergy, 0, Rules.MaxEnergy);
-		ShipLane = 2;
+		ShipLane = std::clamp(NumLanes / 2 - 1, 0, NumLanes - 1);
+		ShipHistory.clear();
+		ShipHistory.push_back({StartSongTimeMs, ShipLane});
 		NextPowerupId = 1;
 		SongTimeMs = StartSongTimeMs;
 		RealTimeMs = 0.0;
@@ -57,106 +59,88 @@ namespace Amp
 		ScheduleNextPowerup();
 	}
 
-	void FSimulation::PressLane(int32_t Lane, double InSongTimeMs)
+	void FSimulation::PressColumn(int32_t Column, double InSongTimeMs)
 	{
-		if (IsFinished() || Lane < 0 || Lane >= NumLanes)
+		if (IsFinished() || Column < 0 || Column >= NumColumns)
 		{
 			return;
 		}
 
-		// Sampled before moving: moving may collect a new Lane Cleaner, which must wait for the next press.
-		const bool bChoosingCleanerLane = IsLaneCleanerArmed();
-		MoveShip(Lane);
-
-		if (bChoosingCleanerLane)
+		if (IsLaneCleanerArmed())
 		{
-			ClearLane(Lane, InSongTimeMs);
+			// While a Lane Cleaner waits for a target, any gem button clears the lane the ship is in.
+			ClearLane(ShipLane, InSongTimeMs);
 			return;
 		}
 
-		FLaneState& LaneState = Lanes[static_cast<size_t>(Lane)];
+		FLaneState& LaneState = Lanes[static_cast<size_t>(ShipLane)];
 		if (LaneState.bCaptured || bAutoPlayAll)
 		{
-			// Auto-play owns this lane; pressing only moves the ship.
+			// Auto-play owns this lane; firing does nothing.
 			return;
 		}
 
 		AdvanceCursor(LaneState);
 
-		// Pick the pending note closest to the press inside the good window.
-		int32_t BestIndex = -1;
-		double BestError = std::numeric_limits<double>::max();
-		for (size_t Slot = LaneState.Cursor; Slot < LaneState.NoteIndices.size(); ++Slot)
+		const int32_t Target = FindPressTarget(LaneState, Column, InSongTimeMs, Params.GoodWindowMs, false);
+		if (Target >= 0)
 		{
-			const int32_t NoteIndex = LaneState.NoteIndices[Slot];
-			const FNote& Note = Notes[static_cast<size_t>(NoteIndex)];
-			if (!Note.IsPending())
-			{
-				continue;
-			}
+			const FNote& Note = Notes[static_cast<size_t>(Target)];
 			const double Offset = InSongTimeMs - Note.TimeMs;
-			if (Offset < -Params.GoodWindowMs)
-			{
-				break;
-			}
-			const double Error = std::abs(Offset);
-			if (Error <= Params.GoodWindowMs && Error < BestError)
-			{
-				BestIndex = NoteIndex;
-				BestError = Error;
-			}
-		}
-
-		if (BestIndex >= 0)
-		{
-			const FNote& Note = Notes[static_cast<size_t>(BestIndex)];
-			ResolveHit(BestIndex, JudgeTimingError(Params, BestError), InSongTimeMs - Note.TimeMs, InSongTimeMs, false);
+			ResolveHit(Target, JudgeTimingError(Params, std::abs(Offset)), Offset, InSongTimeMs, false);
 			return;
 		}
 
-		// No note in the good window: a press just before the next note counts as missing it,
-		// anything further away is a harmless ghost press (the player is lane hopping).
+		// Wrong button while a gem of this lane is in the window: that gem is lost.
+		const int32_t Wrong = FindPressTarget(LaneState, Column, InSongTimeMs, Params.GoodWindowMs, true);
+		if (Wrong >= 0)
+		{
+			ResolveMiss(Wrong, InSongTimeMs - Notes[static_cast<size_t>(Wrong)].TimeMs, InSongTimeMs);
+			return;
+		}
+
+		// A press just before the next gem of this column counts as missing it; anything further
+		// away is a harmless ghost press.
 		for (size_t Slot = LaneState.Cursor; Slot < LaneState.NoteIndices.size(); ++Slot)
 		{
 			const int32_t NoteIndex = LaneState.NoteIndices[Slot];
 			const FNote& Note = Notes[static_cast<size_t>(NoteIndex)];
-			if (!Note.IsPending() || Note.TimeMs <= InSongTimeMs)
+			if (Note.TimeMs - InSongTimeMs > Params.EarlyMissWindowMs)
 			{
-				continue;
+				break;
 			}
-			if (Note.TimeMs - InSongTimeMs <= Params.EarlyMissWindowMs)
+			if (Note.IsPending() && Note.Column == Column && Note.TimeMs > InSongTimeMs)
 			{
 				ResolveMiss(NoteIndex, InSongTimeMs - Note.TimeMs, InSongTimeMs);
 				return;
 			}
-			break;
 		}
 
-		++Stats.GhostPresses;
-		FEvent Event;
-		Event.Type = EEventType::GhostPress;
-		Event.Lane = Lane;
-		Event.SongTimeMs = InSongTimeMs;
-		Emit(Event);
+		EmitGhostPress(Column, InSongTimeMs);
 	}
 
-	void FSimulation::MoveShip(int32_t Lane)
+	void FSimulation::StepShip(int32_t Direction, double InSongTimeMs)
+	{
+		if (IsFinished() || Direction == 0)
+		{
+			return;
+		}
+		SetShipLane(std::clamp(ShipLane + (Direction > 0 ? 1 : -1), 0, NumLanes - 1), InSongTimeMs, false);
+	}
+
+	void FSimulation::MoveShip(int32_t Lane, double InSongTimeMs)
 	{
 		if (IsFinished() || Lane < 0 || Lane >= NumLanes)
 		{
 			return;
 		}
-		if (Lane != ShipLane)
-		{
-			FEvent Event;
-			Event.Type = EEventType::ShipMoved;
-			Event.Lane = Lane;
-			Event.Count = ShipLane;
-			Event.SongTimeMs = SongTimeMs;
-			ShipLane = Lane;
-			Emit(Event);
-		}
-		CollectPowerupsAtShip();
+		SetShipLane(Lane, InSongTimeMs, false);
+	}
+
+	void FSimulation::PressLane(int32_t Lane, int32_t Column, double InSongTimeMs)
+	{
+		MoveShip(Lane, InSongTimeMs);
+		PressColumn(Column, InSongTimeMs);
 	}
 
 	void FSimulation::Advance(double InSongTimeMs, double RealDeltaMs)
@@ -177,7 +161,8 @@ namespace Amp
 			return;
 		}
 		UpdateCaptures(SongTimeMs);
-		UpdatePowerups(SafeDelta, SongTimeMs);
+		UpdatePowerups(SongTimeMs);
+		PruneShipHistory(SongTimeMs);
 		CheckCompletion(SongTimeMs);
 	}
 
@@ -187,12 +172,14 @@ namespace Amp
 		Events.clear();
 	}
 
-	int32_t FSimulation::ForceSpawnPowerup(EPowerupType Type, int32_t Lane)
+	int32_t FSimulation::SpawnPowerup(EPowerupType Type, int32_t Lane, double ArrivalMs)
 	{
-		FFallingPowerup Powerup;
+		FTrackPowerup Powerup;
 		Powerup.Id = NextPowerupId++;
 		Powerup.Type = Type;
 		Powerup.Lane = std::clamp(Lane, 0, NumLanes - 1);
+		Powerup.SpawnedAtMs = SongTimeMs;
+		Powerup.ArrivalMs = ArrivalMs;
 		Powerups.push_back(Powerup);
 
 		FEvent Event;
@@ -203,6 +190,11 @@ namespace Amp
 		Event.SongTimeMs = SongTimeMs;
 		Emit(Event);
 		return Powerup.Id;
+	}
+
+	int32_t FSimulation::ForceSpawnPowerup(EPowerupType Type, int32_t Lane)
+	{
+		return SpawnPowerup(Type, Lane, SongTimeMs + Params.ApproachTimeMs);
 	}
 
 	void FSimulation::ApplyPowerup(EPowerupType Type)
@@ -295,9 +287,22 @@ namespace Amp
 		return std::max(0.0, Lanes[static_cast<size_t>(Lane)].CaptureEndMs - SongTimeMs);
 	}
 
-	double FSimulation::GetPowerupY(const FFallingPowerup& Powerup) const
+	int32_t FSimulation::GetShipLaneAt(double InSongTimeMs) const
 	{
-		return Rules.PowerupLifetimeMs > 0.0 ? Powerup.AgeMs / Rules.PowerupLifetimeMs : 1.0;
+		if (ShipHistory.empty())
+		{
+			return ShipLane;
+		}
+		int32_t Lane = ShipHistory.front().Lane;
+		for (const FShipMove& Move : ShipHistory)
+		{
+			if (Move.TimeMs > InSongTimeMs)
+			{
+				break;
+			}
+			Lane = Move.Lane;
+		}
+		return Lane;
 	}
 
 	FRunSummary FSimulation::Summarize() const
@@ -307,6 +312,7 @@ namespace Amp
 		Summary.Perfect = Stats.Perfect;
 		Summary.Good = Stats.Good;
 		Summary.Miss = Stats.Miss;
+		Summary.Skipped = Stats.Skipped;
 		Summary.AutoHits = Stats.AutoHits;
 		Summary.NotesCleared = Stats.NotesCleared;
 		Summary.TotalNotes = static_cast<int32_t>(Notes.size());
@@ -343,6 +349,99 @@ namespace Amp
 		{
 			++Lane.Cursor;
 		}
+	}
+
+	void FSimulation::SetShipLane(int32_t Lane, double AtMs, bool bAuto)
+	{
+		if (Lane == ShipLane)
+		{
+			return;
+		}
+		// Moves are recorded in order so the lane history stays sorted even if input arrives late.
+		const double MoveMs = ShipHistory.empty() ? AtMs : std::max(AtMs, ShipHistory.back().TimeMs);
+		ShipHistory.push_back({MoveMs, Lane});
+
+		FEvent Event;
+		Event.Type = EEventType::ShipMoved;
+		Event.Lane = Lane;
+		Event.Count = ShipLane;
+		Event.bAuto = bAuto;
+		Event.SongTimeMs = MoveMs;
+		ShipLane = Lane;
+		Emit(Event);
+	}
+
+	bool FSimulation::WasShipInLane(int32_t Lane, double FromMs, double ToMs) const
+	{
+		if (GetShipLaneAt(FromMs) == Lane)
+		{
+			return true;
+		}
+		for (const FShipMove& Move : ShipHistory)
+		{
+			if (Move.TimeMs > ToMs)
+			{
+				break;
+			}
+			if (Move.TimeMs > FromMs && Move.Lane == Lane)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void FSimulation::PruneShipHistory(double NowMs)
+	{
+		// Keep enough history to judge every note and powerup that can still be resolved.
+		const double CutoffMs = NowMs - (Params.GoodWindowMs + Rules.PowerupCollectWindowMs + 2000.0);
+		size_t Drop = 0;
+		while (Drop + 1 < ShipHistory.size() && ShipHistory[Drop + 1].TimeMs <= CutoffMs)
+		{
+			++Drop;
+		}
+		if (Drop > 0)
+		{
+			ShipHistory.erase(ShipHistory.begin(), ShipHistory.begin() + static_cast<std::ptrdiff_t>(Drop));
+		}
+	}
+
+	int32_t FSimulation::FindPressTarget(const FLaneState& Lane, int32_t Column, double AtMs, double WindowMs, bool bAnyColumn) const
+	{
+		int32_t BestIndex = -1;
+		double BestError = std::numeric_limits<double>::max();
+		for (size_t Slot = Lane.Cursor; Slot < Lane.NoteIndices.size(); ++Slot)
+		{
+			const int32_t NoteIndex = Lane.NoteIndices[Slot];
+			const FNote& Note = Notes[static_cast<size_t>(NoteIndex)];
+			const double Offset = AtMs - Note.TimeMs;
+			if (Offset < -WindowMs)
+			{
+				break;
+			}
+			if (!Note.IsPending() || (!bAnyColumn && Note.Column != Column))
+			{
+				continue;
+			}
+			const double Error = std::abs(Offset);
+			if (Error <= WindowMs && Error < BestError)
+			{
+				BestIndex = NoteIndex;
+				BestError = Error;
+			}
+		}
+		return BestIndex;
+	}
+
+	void FSimulation::EmitGhostPress(int32_t Column, double AtMs)
+	{
+		++Stats.GhostPresses;
+		FEvent Event;
+		Event.Type = EEventType::GhostPress;
+		Event.Lane = ShipLane;
+		Event.Column = Column;
+		Event.SongTimeMs = AtMs;
+		Emit(Event);
 	}
 
 	void FSimulation::ResolveHit(int32_t NoteIndex, EJudgement Judgement, double OffsetMs, double AtMs, bool bAuto)
@@ -399,6 +498,7 @@ namespace Amp
 		FEvent Event;
 		Event.Type = EEventType::NoteHit;
 		Event.Lane = Note.Lane;
+		Event.Column = Note.Column;
 		Event.Judgement = Judgement;
 		Event.bAuto = bAuto;
 		Event.NoteIndex = NoteIndex;
@@ -437,6 +537,7 @@ namespace Amp
 		FEvent Event;
 		Event.Type = EEventType::NoteMissed;
 		Event.Lane = Note.Lane;
+		Event.Column = Note.Column;
 		Event.Judgement = EJudgement::Miss;
 		Event.NoteIndex = NoteIndex;
 		Event.Count = Lane.ConsecutiveMisses;
@@ -492,6 +593,29 @@ namespace Amp
 		}
 	}
 
+	void FSimulation::ResolveSkip(int32_t NoteIndex, double AtMs)
+	{
+		FNote& Note = Notes[static_cast<size_t>(NoteIndex)];
+		Note.Judgement = EJudgement::Skipped;
+		Note.ResolvedAtMs = AtMs;
+		--PendingNotes;
+
+		// Leaving a lane breaks the run towards its capture, but not its combo.
+		FLaneState& Lane = Lanes[static_cast<size_t>(Note.Lane)];
+		Lane.CaptureStreak = 0;
+		++Lane.Skipped;
+		++Stats.Skipped;
+
+		FEvent Event;
+		Event.Type = EEventType::NoteSkipped;
+		Event.Lane = Note.Lane;
+		Event.Column = Note.Column;
+		Event.Judgement = EJudgement::Skipped;
+		Event.NoteIndex = NoteIndex;
+		Event.SongTimeMs = AtMs;
+		Emit(Event);
+	}
+
 	void FSimulation::AddEnergy(int32_t Delta)
 	{
 		const bool bWasLow = IsEnergyLow();
@@ -527,7 +651,43 @@ namespace Amp
 		Event.Count = Rules.CaptureEnergyCost;
 		Event.SongTimeMs = AtMs;
 		Emit(Event);
+
+		if (Lane == ShipLane)
+		{
+			AdvanceShipAfterCapture(AtMs);
+		}
 		return true;
+	}
+
+	void FSimulation::AdvanceShipAfterCapture(double AtMs)
+	{
+		if (!Rules.bAutoAdvanceOnCapture || bAutoPlayAll)
+		{
+			return;
+		}
+
+		// Nearest free lane with music coming soon, then within the capture time, then any free lane.
+		// Ties go to the right, the way the track scrolls.
+		const double Horizons[] = {AtMs + 2.0 * Params.ApproachTimeMs, AtMs + Rules.CaptureDurationMs, -1.0};
+		for (const double HorizonMs : Horizons)
+		{
+			for (int32_t Distance = 1; Distance < NumLanes; ++Distance)
+			{
+				for (const int32_t Direction : {1, -1})
+				{
+					const int32_t Lane = ShipLane + Direction * Distance;
+					if (Lane < 0 || Lane >= NumLanes || Lanes[static_cast<size_t>(Lane)].bCaptured)
+					{
+						continue;
+					}
+					if (HorizonMs < 0.0 || CountPendingNotes(Lane, AtMs, HorizonMs) > 0)
+					{
+						SetShipLane(Lane, AtMs, true);
+						return;
+					}
+				}
+			}
+		}
 	}
 
 	void FSimulation::ProcessDueNotes(double NowMs)
@@ -588,9 +748,13 @@ namespace Amp
 			{
 				ResolveHit(Due.NoteIndex, EJudgement::Perfect, 0.0, Note.TimeMs, true);
 			}
-			else
+			else if (GetShipLaneAt(Note.TimeMs) == Note.Lane)
 			{
 				ResolveMiss(Due.NoteIndex, NowMs - Note.TimeMs, Due.TimeMs);
+			}
+			else
+			{
+				ResolveSkip(Due.NoteIndex, Due.TimeMs);
 			}
 		}
 	}
@@ -678,34 +842,42 @@ namespace Amp
 		}
 	}
 
-	void FSimulation::UpdatePowerups(double RealDeltaMs, double NowMs)
+	void FSimulation::UpdatePowerups(double NowMs)
 	{
 		if (bPowerupSpawning && RealTimeMs >= NextPowerupAtMs)
 		{
-			if (NowMs >= 0.0 && NowMs < SongLengthMs - Rules.PowerupSpawnTailMs)
+			const double ArrivalMs = NowMs + Params.ApproachTimeMs;
+			if (NowMs >= 0.0 && ArrivalMs <= SongLengthMs - Rules.PowerupSpawnTailMs)
 			{
 				const size_t TypeIndex = Random.PickWeighted(Params.PowerupWeights.data(), Params.PowerupWeights.size());
-				ForceSpawnPowerup(static_cast<EPowerupType>(TypeIndex), Random.RangeInt(0, NumLanes - 1));
+				SpawnPowerup(static_cast<EPowerupType>(TypeIndex), PickPowerupLane(), ArrivalMs);
 			}
 			ScheduleNextPowerup();
 		}
 
-		for (FFallingPowerup& Powerup : Powerups)
-		{
-			Powerup.AgeMs += RealDeltaMs;
-		}
-
-		CollectPowerupsAtShip();
-
+		const double Window = Rules.PowerupCollectWindowMs;
 		for (size_t Index = 0; Index < Powerups.size();)
 		{
-			if (Powerups[Index].AgeMs >= Rules.PowerupLifetimeMs)
+			const FTrackPowerup& Powerup = Powerups[Index];
+			const double FromMs = Powerup.ArrivalMs - Window;
+			if (NowMs < FromMs)
+			{
+				++Index;
+				continue;
+			}
+			const double ToMs = std::min(NowMs, Powerup.ArrivalMs + Window);
+			if (WasShipInLane(Powerup.Lane, FromMs, ToMs))
+			{
+				CollectPowerup(Index, ToMs);
+				continue;
+			}
+			if (NowMs > Powerup.ArrivalMs + Window)
 			{
 				FEvent Event;
 				Event.Type = EEventType::PowerupDespawned;
-				Event.Lane = Powerups[Index].Lane;
-				Event.Powerup = Powerups[Index].Type;
-				Event.PowerupId = Powerups[Index].Id;
+				Event.Lane = Powerup.Lane;
+				Event.Powerup = Powerup.Type;
+				Event.PowerupId = Powerup.Id;
 				Event.SongTimeMs = NowMs;
 				Emit(Event);
 				Powerups.erase(Powerups.begin() + static_cast<std::ptrdiff_t>(Index));
@@ -715,23 +887,9 @@ namespace Amp
 		}
 	}
 
-	void FSimulation::CollectPowerupsAtShip()
+	void FSimulation::CollectPowerup(size_t Index, double AtMs)
 	{
-		for (size_t Index = 0; Index < Powerups.size();)
-		{
-			const FFallingPowerup& Powerup = Powerups[Index];
-			if (Powerup.Lane == ShipLane && std::abs(GetPowerupY(Powerup) - Rules.ShipY) <= Rules.PowerupCollectBand)
-			{
-				CollectPowerup(Index);
-				continue;
-			}
-			++Index;
-		}
-	}
-
-	void FSimulation::CollectPowerup(size_t Index)
-	{
-		const FFallingPowerup Powerup = Powerups[Index];
+		const FTrackPowerup Powerup = Powerups[Index];
 		Powerups.erase(Powerups.begin() + static_cast<std::ptrdiff_t>(Index));
 
 		Score += Rules.PowerupCollectPoints;
@@ -743,10 +901,29 @@ namespace Amp
 		Event.Powerup = Powerup.Type;
 		Event.PowerupId = Powerup.Id;
 		Event.Points = Rules.PowerupCollectPoints;
-		Event.SongTimeMs = SongTimeMs;
+		Event.SongTimeMs = AtMs;
 		Emit(Event);
 
 		ApplyPowerup(Powerup.Type);
+	}
+
+	int32_t FSimulation::PickPowerupLane()
+	{
+		// Captured lanes play themselves, so a powerup there could only be grabbed by leaving the music.
+		std::array<int32_t, NumLanes> Candidates{};
+		int32_t Count = 0;
+		for (int32_t Lane = 0; Lane < NumLanes; ++Lane)
+		{
+			if (!Lanes[static_cast<size_t>(Lane)].bCaptured)
+			{
+				Candidates[static_cast<size_t>(Count++)] = Lane;
+			}
+		}
+		if (Count == 0)
+		{
+			return Random.RangeInt(0, NumLanes - 1);
+		}
+		return Candidates[static_cast<size_t>(Random.RangeInt(0, Count - 1))];
 	}
 
 	void FSimulation::ScheduleNextPowerup()

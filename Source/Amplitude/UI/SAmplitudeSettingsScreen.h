@@ -30,8 +30,7 @@ private:
 	void ChangeResolution(int32 Direction);
 	void ChangeFrameRateLimit(int32 Direction);
 	void ApplyGraphics();
-	void BindLaneKey(int32 Lane, int32 Slot, const FKey& Key);
-	void BindPauseKey(int32 Slot, const FKey& Key);
+	void BindKey(int32 Action, int32 Slot, const FKey& Key);
 	static void RemoveKeyEverywhere(FAmplitudeControlProfile& Profile, const FKey& Key);
 	void OnControlsChanged();
 	void RestoreDefaults();

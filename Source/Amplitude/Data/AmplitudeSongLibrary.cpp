@@ -74,8 +74,8 @@ namespace
 		return Finder(StringCast<ANSICHAR>(*Lower).Get());
 	}
 
-	/** Lanes are 1-based numbers (spec) or instrument names; an array means a double/triple note. */
-	bool AddLaneValue(const FJsonValue& Value, uint8& InOutMask)
+	/** Lanes are 1-based numbers (spec) or instrument names. */
+	int32 ParseLaneValue(const FJsonValue& Value)
 	{
 		int32 Lane = INDEX_NONE;
 		if (Value.Type == EJson::Number)
@@ -87,34 +87,83 @@ namespace
 			const FString Text = Value.AsString();
 			Lane = Text.IsNumeric() ? FCString::Atoi(*Text) - 1 : FindKeyIndex(Text, &Amp::FindLaneByInstrumentKey);
 		}
-		if (Lane < 0 || Lane >= Amp::NumLanes)
-		{
-			return false;
-		}
-		InOutMask = static_cast<uint8>(InOutMask | (1u << Lane));
-		return true;
+		return (Lane >= 0 && Lane < Amp::NumLanes) ? Lane : INDEX_NONE;
 	}
 
-	bool ParseLaneMask(const FJsonValue& Value, uint8& OutMask)
+	/** Columns are 1-3 (left to right) or "left" / "middle" / "right". */
+	int32 ParseColumnValue(const FJsonValue& Value)
+	{
+		int32 Column = INDEX_NONE;
+		if (Value.Type == EJson::Number)
+		{
+			Column = FMath::RoundToInt32(Value.AsNumber()) - 1;
+		}
+		else if (Value.Type == EJson::String)
+		{
+			const FString Text = Value.AsString().ToLower().TrimStartAndEnd();
+			if (Text.IsNumeric())
+			{
+				Column = FCString::Atoi(*Text) - 1;
+			}
+			else if (Text == TEXT("left") || Text == TEXT("l"))
+			{
+				Column = 0;
+			}
+			else if (Text == TEXT("middle") || Text == TEXT("center") || Text == TEXT("m"))
+			{
+				Column = 1;
+			}
+			else if (Text == TEXT("right") || Text == TEXT("r"))
+			{
+				Column = 2;
+			}
+		}
+		return (Column >= 0 && Column < Amp::NumColumns) ? Column : INDEX_NONE;
+	}
+
+	/** A single column or an array of columns (a chord); false if any value is invalid. */
+	bool ParseColumnMask(const FJsonValue& Value, uint8& OutMask)
 	{
 		OutMask = 0;
 		if (Value.Type == EJson::Array)
 		{
 			for (const TSharedPtr<FJsonValue>& Element : Value.AsArray())
 			{
-				if (!Element.IsValid() || !AddLaneValue(*Element, OutMask))
+				const int32 Column = Element.IsValid() ? ParseColumnValue(*Element) : INDEX_NONE;
+				if (Column == INDEX_NONE)
 				{
 					return false;
 				}
+				OutMask = static_cast<uint8>(OutMask | (1u << Column));
 			}
 			return OutMask != 0;
 		}
-		return AddLaneValue(Value, OutMask);
+		const int32 Column = ParseColumnValue(Value);
+		if (Column == INDEX_NONE)
+		{
+			return false;
+		}
+		OutMask = static_cast<uint8>(1u << Column);
+		return true;
+	}
+
+	/** Gems of charts written without columns walk middle, left, middle, right through each lane. */
+	uint8 DefaultColumnMask(int32 NoteInLane)
+	{
+		static constexpr int32 Pattern[] = {1, 0, 1, 2};
+		return static_cast<uint8>(1u << Pattern[NoteInLane % UE_ARRAY_COUNT(Pattern)]);
+	}
+
+	/** The first N columns, used when an old multi-lane chord is folded into one lane. */
+	uint8 LeadingColumnsMask(int32 Count)
+	{
+		return static_cast<uint8>((1u << FMath::Clamp(Count, 1, Amp::NumColumns)) - 1u);
 	}
 
 	void ParseChart(const FJsonArray& Array, const FString& ChartName, std::vector<Amp::FChartEntry>& Out, TArray<FString>& Warnings)
 	{
 		int32 NextAutoId = 1;
+		int32 NotesPerLane[Amp::NumLanes] = {};
 		for (int32 Index = 0; Index < Array.Num(); ++Index)
 		{
 			const TSharedPtr<FJsonValue>& Value = Array[Index];
@@ -132,24 +181,68 @@ namespace
 				continue;
 			}
 
+			// "lane": one lane. An array of lanes (older charts) becomes a chord in the first lane listed.
 			const TSharedPtr<FJsonValue>* LaneValue = FindField(Note, TEXT("lane"));
 			if (LaneValue == nullptr)
 			{
 				LaneValue = FindField(Note, TEXT("lanes"));
 			}
-			uint8 Mask = 0;
-			if (LaneValue == nullptr || !ParseLaneMask(**LaneValue, Mask))
+			int32 Lane = INDEX_NONE;
+			int32 LegacyChordSize = 0;
+			if (LaneValue != nullptr && (*LaneValue)->Type == EJson::Array)
 			{
-				Warnings.Add(FString::Printf(TEXT("%s[%d]: lane must be 1-6 or an array of lanes"), *ChartName, Index));
+				for (const TSharedPtr<FJsonValue>& Element : (*LaneValue)->AsArray())
+				{
+					const int32 Parsed = Element.IsValid() ? ParseLaneValue(*Element) : INDEX_NONE;
+					if (Parsed == INDEX_NONE)
+					{
+						Lane = INDEX_NONE;
+						break;
+					}
+					Lane = LegacyChordSize == 0 ? Parsed : Lane;
+					++LegacyChordSize;
+				}
+			}
+			else if (LaneValue != nullptr)
+			{
+				Lane = ParseLaneValue(**LaneValue);
+			}
+			if (Lane == INDEX_NONE)
+			{
+				Warnings.Add(FString::Printf(TEXT("%s[%d]: lane must be 1-6 or an instrument name"), *ChartName, Index));
 				continue;
 			}
+
+			uint8 Mask = 0;
+			const TSharedPtr<FJsonValue>* ColumnValue = FindField(Note, TEXT("column"));
+			if (ColumnValue == nullptr)
+			{
+				ColumnValue = FindField(Note, TEXT("columns"));
+			}
+			if (ColumnValue != nullptr)
+			{
+				if (!ParseColumnMask(**ColumnValue, Mask))
+				{
+					Warnings.Add(FString::Printf(TEXT("%s[%d]: column must be 1-3 (left, middle, right) or an array of them"), *ChartName, Index));
+					continue;
+				}
+			}
+			else if (LegacyChordSize > 1)
+			{
+				Mask = LeadingColumnsMask(LegacyChordSize);
+			}
+			else
+			{
+				Mask = DefaultColumnMask(NotesPerLane[Lane]);
+			}
+			++NotesPerLane[Lane];
 
 			double IdValue = 0.0;
 			const int32 Id = GetNumberField(Note, TEXT("id"), IdValue) ? static_cast<int32>(IdValue) : NextAutoId;
 			NextAutoId = FMath::Max(NextAutoId, Id + 1);
 
-			const int32 LaneCount = Amp::CountLanes(Mask);
-			Amp::ENoteType Type = Amp::NoteTypeForLaneCount(LaneCount);
+			const int32 ColumnCount = Amp::CountColumns(Mask);
+			Amp::ENoteType Type = Amp::NoteTypeForColumnCount(ColumnCount);
 			FString TypeText;
 			if (GetStringField(Note, TEXT("type"), TypeText))
 			{
@@ -162,9 +255,9 @@ namespace
 				{
 					Type = static_cast<Amp::ENoteType>(TypeIndex);
 					const int32 Expected = Type == Amp::ENoteType::Double ? 2 : (Type == Amp::ENoteType::Triple ? 3 : -1);
-					if (Expected > 0 && Expected != LaneCount)
+					if (Expected > 0 && Expected != ColumnCount)
 					{
-						Warnings.Add(FString::Printf(TEXT("%s[%d]: '%s' note lists %d lane(s)"), *ChartName, Index, *TypeText, LaneCount));
+						Warnings.Add(FString::Printf(TEXT("%s[%d]: '%s' note uses %d column(s)"), *ChartName, Index, *TypeText, ColumnCount));
 					}
 				}
 			}
@@ -174,14 +267,15 @@ namespace
 			{
 				double IntervalMs = 125.0;
 				GetNumberField(Note, TEXT("interval_ms"), IntervalMs);
-				Amp::AppendStream(Out, Id, TimeMs, Mask, static_cast<int32>(Count), IntervalMs);
+				Amp::AppendStream(Out, Id, TimeMs, Lane, Mask, static_cast<int32>(Count), IntervalMs);
 				continue;
 			}
 
 			Amp::FChartEntry Entry;
 			Entry.Id = Id;
 			Entry.TimeMs = TimeMs;
-			Entry.LaneMask = Mask;
+			Entry.Lane = Lane;
+			Entry.ColumnMask = Mask;
 			Entry.Type = Type;
 			Out.push_back(Entry);
 		}
@@ -326,9 +420,16 @@ namespace
 		{
 			Rules.SongCompleteBonus = FMath::Max(0, FMath::RoundToInt32(Value));
 		}
-		if (GetNumberField(Object, TEXT("powerup_lifetime_ms"), Value))
+		if (GetNumberField(Object, TEXT("powerup_collect_window_ms"), Value))
 		{
-			Rules.PowerupLifetimeMs = FMath::Clamp(Value, 2000.0, 30000.0);
+			Rules.PowerupCollectWindowMs = FMath::Clamp(Value, 50.0, 1000.0);
+		}
+		if (const TSharedPtr<FJsonValue>* AutoAdvance = FindField(Object, TEXT("auto_advance_on_capture")))
+		{
+			if ((*AutoAdvance)->Type == EJson::Boolean)
+			{
+				Rules.bAutoAdvanceOnCapture = (*AutoAdvance)->AsBool();
+			}
 		}
 	}
 

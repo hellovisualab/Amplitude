@@ -15,6 +15,7 @@
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Stage/AmplitudeStage.h"
 #include "UI/AmplitudeStyle.h"
 #include "UI/SAmplitudeGameView.h"
 #include "UI/SAmplitudeMenus.h"
@@ -111,6 +112,18 @@ void AAmplitudeDirector::BeginPlay()
 	SfxPlayer->Start();
 	ApplyAudioSettings();
 
+	FActorSpawnParameters StageSpawn;
+	StageSpawn.Owner = this;
+	StageSpawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	Stage = GetWorld()->SpawnActor<AAmplitudeStage>(AAmplitudeStage::StaticClass(), FTransform::Identity, StageSpawn);
+	if (Stage != nullptr)
+	{
+		Stage->SetDirector(this);
+		// The stage draws the state this director has just advanced.
+		Stage->AddTickPrerequisiteActor(this);
+	}
+	EnsureStageView();
+
 	TWeakObjectPtr<AAmplitudeDirector> WeakThis(this);
 	AmplitudeUI::SetSoundHandler([WeakThis](Amp::ESfx Sfx)
 	{
@@ -157,6 +170,10 @@ void AAmplitudeDirector::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	bLoading = false;
 	PendingLoad.Reset();
 	Session.Reset();
+	if (Stage != nullptr)
+	{
+		Stage->SetDirector(nullptr);
+	}
 	StemPlayer->Stop();
 	SfxPlayer->Stop();
 	Super::EndPlay(EndPlayReason);
@@ -167,6 +184,7 @@ void AAmplitudeDirector::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	const double Now = FPlatformTime::Seconds();
+	EnsureStageView();
 	ApplyPendingFocus();
 	if (bLoading)
 	{
@@ -181,6 +199,33 @@ void AAmplitudeDirector::Tick(float DeltaSeconds)
 UAmplitudeUserSettings* AAmplitudeDirector::GetSettings() const
 {
 	return UAmplitudeUserSettings::Get();
+}
+
+AAmplitudeStage* AAmplitudeDirector::GetStage() const
+{
+	return Stage.Get();
+}
+
+void AAmplitudeDirector::EnsureStageView()
+{
+	AAmplitudePlayerController* Controller = GetAmplitudeController();
+	AAmplitudeStage* StageActor = Stage.Get();
+	if (StageActor != nullptr && Controller != nullptr && Controller->GetViewTarget() != StageActor)
+	{
+		Controller->SetViewTarget(StageActor);
+	}
+}
+
+void AAmplitudeDirector::ForwardSimEvent(const Amp::FEvent& Event)
+{
+	if (Stage != nullptr)
+	{
+		Stage->HandleSimEvent(Event);
+	}
+	if (GameView.IsValid())
+	{
+		GameView->HandleSimEvent(Event);
+	}
 }
 
 AAmplitudePlayerController* AAmplitudeDirector::GetAmplitudeController() const
@@ -437,15 +482,16 @@ void AAmplitudeDirector::BeginSession(std::shared_ptr<const Amp::FSongAudio> Aud
 	Session = MakeUnique<FAmplitudeSession>(Config, StemPlayer, SfxPlayer);
 	Session->OnEvent = [this](const Amp::FEvent& Event)
 	{
-		if (GameView.IsValid())
-		{
-			GameView->HandleSimEvent(Event);
-		}
+		ForwardSimEvent(Event);
 	};
 
 	if (GameView.IsValid())
 	{
 		GameView->ResetEffects();
+	}
+	if (Stage != nullptr)
+	{
+		Stage->ResetEffects();
 	}
 	StemPlayer->SetSoloLane(SoloLane);
 	ResumeCountdownEndSeconds = 0.0;
@@ -471,6 +517,10 @@ void AAmplitudeDirector::EndSession()
 	if (GameView.IsValid())
 	{
 		GameView->ResetEffects();
+	}
+	if (Stage != nullptr)
+	{
+		Stage->ResetEffects();
 	}
 }
 
@@ -603,11 +653,40 @@ void AAmplitudeDirector::RescanSongs()
 	SelectedSongIndex = Previous.IsValid() ? FMath::Max(0, SongLibrary.IndexOfId(Previous->Id)) : 0;
 }
 
-void AAmplitudeDirector::HandleLaneInput(int32 Lane, double PressedAtSeconds)
+void AAmplitudeDirector::HandleActionInput(int32 Action, double PressedAtSeconds)
+{
+	if (Action == AmplitudeControls::Pause)
+	{
+		HandlePauseInput();
+		return;
+	}
+	if (Screen != EAmplitudeScreen::Playing || !Session.IsValid() || ResumeCountdownEndSeconds > 0.0)
+	{
+		return;
+	}
+	switch (Action)
+	{
+	case AmplitudeControls::MoveLeft:
+		Session->QueueStep(-1, PressedAtSeconds);
+		break;
+	case AmplitudeControls::MoveRight:
+		Session->QueueStep(1, PressedAtSeconds);
+		break;
+	case AmplitudeControls::GemLeft:
+	case AmplitudeControls::GemMiddle:
+	case AmplitudeControls::GemRight:
+		Session->QueueFire(Action - AmplitudeControls::GemLeft, PressedAtSeconds);
+		break;
+	default:
+		break;
+	}
+}
+
+void AAmplitudeDirector::HandleLaneJump(int32 Lane, double PressedAtSeconds)
 {
 	if (Screen == EAmplitudeScreen::Playing && Session.IsValid() && ResumeCountdownEndSeconds <= 0.0)
 	{
-		Session->QueuePress(Lane, PressedAtSeconds);
+		Session->QueueJump(Lane, PressedAtSeconds);
 	}
 }
 

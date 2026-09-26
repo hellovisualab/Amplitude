@@ -41,21 +41,18 @@ protected:
 
 private:
 	void CreateInputActions();
-	void HandleLane(int32 Lane);
-	void OnLane1() { HandleLane(0); }
-	void OnLane2() { HandleLane(1); }
-	void OnLane3() { HandleLane(2); }
-	void OnLane4() { HandleLane(3); }
-	void OnLane5() { HandleLane(4); }
-	void OnLane6() { HandleLane(5); }
+	void HandleAction(int32 Action);
+	void OnMoveLeft();
+	void OnMoveRight();
+	void OnGemLeft();
+	void OnGemMiddle();
+	void OnGemRight();
 	void OnPause();
 	AAmplitudeDirector* GetDirector() const;
 
+	/** Indexed by AmplitudeControls::EAction. */
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UInputAction>> LaneActions;
-
-	UPROPERTY(Transient)
-	TObjectPtr<UInputAction> PauseAction;
+	TArray<TObjectPtr<UInputAction>> Actions;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> MappingContext;

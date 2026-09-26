@@ -52,8 +52,12 @@ public:
 	void Start(double WallSeconds);
 	void Tick(double WallSeconds);
 
-	/** Records a lane press; it is judged at the song time it happened, on the next Tick. */
-	void QueuePress(int32 Lane, double WallSeconds);
+	/** Steers the Beat Blaster one lane left (-1) or right (+1); applied at the song time it happened, on the next Tick. */
+	void QueueStep(int32 Direction, double WallSeconds);
+	/** A gem button (column 0-2); judged at the song time it happened, on the next Tick. */
+	void QueueFire(int32 Column, double WallSeconds);
+	/** Moves the Beat Blaster straight to a lane (mouse / touch). */
+	void QueueJump(int32 Lane, double WallSeconds);
 	void SetPaused(bool bPause, double WallSeconds);
 	void StopAudio();
 
@@ -82,11 +86,22 @@ public:
 	TFunction<void(const Amp::FEvent&)> OnEvent;
 
 private:
-	struct FQueuedPress
+	enum class EInputKind : uint8
 	{
-		int32 Lane = 0;
+		Step,
+		Fire,
+		Jump
+	};
+
+	struct FQueuedInput
+	{
+		EInputKind Kind = EInputKind::Fire;
+		/** Direction, column or lane depending on Kind. */
+		int32 Value = 0;
 		double WallSeconds = 0.0;
 	};
+
+	void QueueInput(EInputKind Kind, int32 Value, double WallSeconds);
 
 	double GetTotalOffsetMs() const;
 	void SyncToAudio(double WallSeconds);
@@ -99,7 +114,7 @@ private:
 
 	Amp::FSimulation Simulation;
 	Amp::FSongClock Clock;
-	TArray<FQueuedPress> PendingPresses;
+	TArray<FQueuedInput> PendingInputs;
 	std::vector<Amp::FEvent> EventScratch;
 
 	double LastWallSeconds = 0.0;

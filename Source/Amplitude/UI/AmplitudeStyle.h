@@ -9,7 +9,7 @@
 
 struct FSlateBrush;
 
-/** Colours, fonts and brushes for the neon look of spec section 12. Everything is code-defined (no assets). */
+/** Colours, fonts and brushes for the UI. Everything is code-defined (no assets). */
 namespace AmplitudeStyle
 {
 	FLinearColor Hex(const TCHAR* HexCode);
@@ -31,6 +31,8 @@ namespace AmplitudeStyle
 
 	/** Lane colour honouring the colourblind/custom palette in the user settings. */
 	FLinearColor GetLaneColor(int32 Lane);
+	/** Tint for the left / middle / right gem buttons in prompts and the controls screen. */
+	FLinearColor GetColumnColor(int32 Column);
 	FLinearColor GetPowerupColor(Amp::EPowerupType Type);
 	/** Short label drawn inside a powerup gem. */
 	const TCHAR* GetPowerupGlyph(Amp::EPowerupType Type);

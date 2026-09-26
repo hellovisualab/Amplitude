@@ -13,20 +13,20 @@ namespace AmplitudeStyle
 		return FLinearColor(FColor::FromHex(HexCode));
 	}
 
-	const FLinearColor Background(FColor(7, 7, 13));
-	const FLinearColor Panel(FColor(14, 14, 26, 235));
-	const FLinearColor PanelOutline(FColor(90, 90, 140, 200));
-	const FLinearColor Text(FColor(235, 238, 255));
-	const FLinearColor TextDim(FColor(140, 146, 170));
-	const FLinearColor Accent(FColor(0, 229, 255));
-	const FLinearColor Perfect(FColor(255, 215, 64));
-	const FLinearColor Good(FColor(207, 216, 220));
-	const FLinearColor Miss(FColor(255, 23, 68));
-	const FLinearColor EnergyHigh(FColor(0, 230, 118));
-	const FLinearColor EnergyMid(FColor(255, 234, 0));
-	const FLinearColor EnergyLow(FColor(255, 23, 68));
-	const FLinearColor Shield(FColor(130, 177, 255));
-	const FLinearColor Fever(FColor(255, 109, 0));
+	const FLinearColor Background(FColor(12, 14, 30));
+	const FLinearColor Panel(FColor(16, 20, 44, 215));
+	const FLinearColor PanelOutline(FColor(255, 255, 255, 60));
+	const FLinearColor Text(FColor(246, 247, 252));
+	const FLinearColor TextDim(FColor(168, 174, 200));
+	const FLinearColor Accent(FColor(255, 138, 101));
+	const FLinearColor Perfect(FColor(255, 205, 60));
+	const FLinearColor Good(FColor(190, 225, 255));
+	const FLinearColor Miss(FColor(255, 82, 82));
+	const FLinearColor EnergyHigh(FColor(46, 211, 160));
+	const FLinearColor EnergyMid(FColor(255, 198, 61));
+	const FLinearColor EnergyLow(FColor(255, 90, 95));
+	const FLinearColor Shield(FColor(142, 197, 255));
+	const FLinearColor Fever(FColor(255, 140, 66));
 
 	FLinearColor GetLaneColor(int32 Lane)
 	{
@@ -34,8 +34,14 @@ namespace AmplitudeStyle
 		{
 			return Settings->GetLaneColor(Lane);
 		}
-		const TCHAR* const Palette[Amp::NumLanes] = {TEXT("FF1744"), TEXT("D500F9"), TEXT("00B0FF"), TEXT("00E676"), TEXT("FF6E40"), TEXT("00E5FF")};
+		const TCHAR* const Palette[Amp::NumLanes] = {TEXT("FF5A5F"), TEXT("9B6BFF"), TEXT("3D8BFF"), TEXT("FFC63D"), TEXT("2ED3A0"), TEXT("FF8C42")};
 		return Hex(Palette[FMath::Clamp(Lane, 0, Amp::NumLanes - 1)]);
+	}
+
+	FLinearColor GetColumnColor(int32 Column)
+	{
+		const TCHAR* const Palette[Amp::NumColumns] = {TEXT("8EC5FF"), TEXT("FFFFFF"), TEXT("FFB4A2")};
+		return Hex(Palette[FMath::Clamp(Column, 0, Amp::NumColumns - 1)]);
 	}
 
 	FLinearColor GetPowerupColor(Amp::EPowerupType Type)
@@ -43,17 +49,17 @@ namespace AmplitudeStyle
 		switch (Type)
 		{
 		case Amp::EPowerupType::Score2x:
-			return FLinearColor(FColor(255, 214, 0));
+			return FLinearColor(FColor(255, 198, 61));
 		case Amp::EPowerupType::LaneCleaner:
-			return FLinearColor(FColor(0, 176, 255));
+			return FLinearColor(FColor(79, 195, 247));
 		case Amp::EPowerupType::SlowMotion:
-			return FLinearColor(FColor(170, 0, 255));
+			return FLinearColor(FColor(155, 107, 255));
 		case Amp::EPowerupType::Shield:
-			return FLinearColor(FColor(224, 230, 245));
+			return FLinearColor(FColor(227, 236, 255));
 		case Amp::EPowerupType::Fever:
-			return FLinearColor(FColor(255, 87, 34));
+			return FLinearColor(FColor(255, 140, 66));
 		case Amp::EPowerupType::AutoCapture:
-			return FLinearColor(FColor(0, 230, 118));
+			return FLinearColor(FColor(46, 211, 160));
 		}
 		return FLinearColor::White;
 	}
@@ -83,13 +89,13 @@ namespace AmplitudeStyle
 		switch (Difficulty)
 		{
 		case Amp::EDifficulty::Mellow:
-			return FLinearColor(FColor(0, 230, 118));
+			return FLinearColor(FColor(46, 211, 160));
 		case Amp::EDifficulty::Normal:
-			return FLinearColor(FColor(0, 229, 255));
+			return FLinearColor(FColor(61, 139, 255));
 		case Amp::EDifficulty::Brutal:
-			return FLinearColor(FColor(255, 145, 0));
+			return FLinearColor(FColor(255, 140, 66));
 		case Amp::EDifficulty::Insane:
-			return FLinearColor(FColor(255, 23, 68));
+			return FLinearColor(FColor(255, 90, 95));
 		}
 		return Accent;
 	}
@@ -201,6 +207,10 @@ namespace AmplitudeStyle
 			{EKeys::Gamepad_LeftTrigger, TEXT("LT")},
 			{EKeys::Gamepad_RightTrigger, TEXT("RT")},
 			{EKeys::Gamepad_Special_Right, TEXT("START")},
+			{EKeys::Gamepad_LeftStick_Left, TEXT("L-STICK LEFT")},
+			{EKeys::Gamepad_LeftStick_Right, TEXT("L-STICK RIGHT")},
+			{EKeys::Left, TEXT("LEFT")},
+			{EKeys::Right, TEXT("RIGHT")},
 			{EKeys::Gamepad_Special_Left, TEXT("BACK")},
 			{EKeys::SpaceBar, TEXT("SPACE")},
 			{EKeys::Escape, TEXT("ESC")},

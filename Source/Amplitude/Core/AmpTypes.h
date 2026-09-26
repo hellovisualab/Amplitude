@@ -12,6 +12,8 @@
 namespace Amp
 {
 	constexpr int32_t NumLanes = 6;
+	/** Note columns inside a lane, one per gem button (left / middle / right). */
+	constexpr int32_t NumColumns = 3;
 	constexpr int32_t NumDifficulties = 4;
 	constexpr int32_t NumPowerupTypes = 6;
 	constexpr int32_t NumComboTiers = 4;
@@ -29,7 +31,9 @@ namespace Amp
 		None,
 		Perfect,
 		Good,
-		Miss
+		Miss,
+		/** Passed while the Beat Blaster was in another lane: no score, no penalty. */
+		Skipped
 	};
 
 	enum class EDifficulty : uint8_t
@@ -50,17 +54,19 @@ namespace Amp
 		AutoCapture
 	};
 
-	/** One entry of a song chart: a moment in time that may cover several lanes (double/triple notes). */
+	/** One entry of a song chart: a moment in one lane that may cover several columns (double/triple notes). */
 	struct FChartEntry
 	{
 		int32_t Id = 0;
 		double TimeMs = 0.0;
-		/** Bit i set => lane i (0-based) has a note at this time. */
-		uint8_t LaneMask = 0;
+		/** 0-based lane (lane 1 in the UI and JSON is index 0). */
+		int32_t Lane = 0;
+		/** Bit c set => column c (0 = left, 1 = middle, 2 = right) has a gem at this time. */
+		uint8_t ColumnMask = 0b010;
 		ENoteType Type = ENoteType::Single;
 	};
 
-	/** A single playable note in one lane. Multi-lane chart entries expand to one FNote per lane. */
+	/** A single gem in one lane and column. Chord chart entries expand to one FNote per column. */
 	struct FNote
 	{
 		int32_t Id = 0;
@@ -69,6 +75,8 @@ namespace Amp
 		double TimeMs = 0.0;
 		/** 0-based lane index (lane 1 in the UI is index 0). */
 		int32_t Lane = 0;
+		/** 0 = left, 1 = middle, 2 = right gem button. */
+		int32_t Column = 1;
 		ENoteType Type = ENoteType::Single;
 
 		EJudgement Judgement = EJudgement::None;
@@ -132,15 +140,12 @@ namespace Amp
 
 		int32_t MuteMissStreak = 4;
 
-		/** Normalised playfield layout: 0 = spawn line at the top, 1 = bottom of the playfield. */
-		double HitLineY = 0.82;
-		double ShipY = 0.9;
-
-		double PowerupLifetimeMs = 8000.0;
-		/** Half-height of the ship's pickup band in normalised playfield units. */
-		double PowerupCollectBand = 0.045;
+		/** A powerup rides its lane like a gem and is picked up if the ship is in that lane when it arrives. */
+		double PowerupCollectWindowMs = 250.0;
 		/** No powerups spawn during the last few seconds of a song. */
 		double PowerupSpawnTailMs = 3000.0;
+		/** After capturing the lane it is in, the Beat Blaster jumps to the next lane with music coming. */
+		bool bAutoAdvanceOnCapture = true;
 
 		double Score2xDurationMs = 15000.0;
 		double SlowMotionDurationMs = 10000.0;

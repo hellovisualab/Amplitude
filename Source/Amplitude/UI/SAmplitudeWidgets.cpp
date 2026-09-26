@@ -493,7 +493,8 @@ namespace AmplitudeUI
 	{
 		return SNew(SBorder)
 			.BorderImage(AmplitudeStyle::WhiteBrush())
-			.BorderBackgroundColor(FSlateColor(FLinearColor(0.0f, 0.0f, 0.0f, Opacity)))
+			// A light navy veil: the 3D stage keeps playing behind every menu.
+			.BorderBackgroundColor(FSlateColor(FLinearColor(0.02f, 0.03f, 0.09f, Opacity * 0.6f)))
 			.HAlign(HAlign_Center)
 			.VAlign(VAlign_Center)
 			.Padding(FMargin(24.0f))

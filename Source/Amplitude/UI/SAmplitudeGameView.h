@@ -9,9 +9,9 @@ class AAmplitudeDirector;
 class FAmplitudeSession;
 
 /**
- * Draws the playfield and in-game HUD (spec 11.1, 12): six lanes with falling notes, hit zones,
- * the Beat Blaster, powerups, particles, judgement pop-ups, screen shake and the top/bottom bars.
- * With no active session it draws an animated attract-mode backdrop for the menus.
+ * The in-game HUD drawn over the 3D stage (spec 11.1, 11.2): score and multiplier, song progress,
+ * energy, a strip with every lane's state, active powerups, button prompts, judgement pop-ups
+ * anchored to the 3D hit line, banners and the countdowns. Draws nothing without a session.
  */
 class SAmplitudeGameView : public SLeafWidget
 {
@@ -22,7 +22,7 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
-	/** Spawns the visual feedback for a simulation event. */
+	/** Pop-ups and banners for a simulation event. */
 	void HandleSimEvent(const Amp::FEvent& Event);
 	void ResetEffects();
 
@@ -31,26 +31,17 @@ public:
 	virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override;
 
 private:
-	/** Particle/pop-up positions are stored in normalised playfield space (x: 0-1 across, y: 0-1 down). */
-	struct FParticle
-	{
-		FVector2D Position;
-		FVector2D Velocity;
-		FLinearColor Color;
-		float Age = 0.0f;
-		float Life = 0.5f;
-		float Size = 6.0f;
-	};
-
+	/** Text that rises from a point in the 3D world. */
 	struct FPopup
 	{
 		FString Text;
 		FLinearColor Color;
-		FVector2D Position;
+		FVector WorldLocation = FVector::ZeroVector;
+		/** Screen offset (in units of the HUD scale) from the projected point. */
+		FVector2D Offset = FVector2D::ZeroVector;
 		float Age = 0.0f;
 		float Life = 0.6f;
 		float Size = 22.0f;
-		float Rise = 0.06f;
 	};
 
 	struct FBanner
@@ -61,73 +52,26 @@ private:
 		float Life = 1.2f;
 	};
 
-	struct FRing
-	{
-		FVector2D Position;
-		FLinearColor Color;
-		float Age = 0.0f;
-		float Life = 0.6f;
-		float MaxRadius = 0.2f;
-	};
+	int32 PaintTopBar(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const;
+	int32 PaintLaneStrip(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const;
+	int32 PaintPowerups(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const;
+	int32 PaintPrompts(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const;
+	int32 PaintPopups(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, float Scale) const;
+	int32 PaintCenterMessages(const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session, float Scale) const;
 
-	/** Screen-space layout of the playfield for the current paint. */
-	struct FLayout
-	{
-		FVector2D Size = FVector2D::ZeroVector;
-		float TopBar = 0.0f;
-		float BottomBar = 0.0f;
-		float FieldLeft = 0.0f;
-		float FieldTop = 0.0f;
-		float FieldWidth = 0.0f;
-		float FieldHeight = 0.0f;
-		float LaneWidth = 0.0f;
-		float HitLineY = 0.0f;
-		float ShipY = 0.0f;
-		FVector2D Shake = FVector2D::ZeroVector;
-		float Zoom = 1.0f;
-		bool bDesaturate = false;
-
-		FVector2D ToScreen(const FVector2D& Normalized) const;
-		/** Normalised x of a lane's centre. */
-		static float LaneCenterX(int32 Lane);
-	};
-
-	FLayout ComputeLayout(const FGeometry& Geometry, const Amp::FSimulation* Simulation) const;
-	float NoteY(const FLayout& Layout, const Amp::FSimulation& Simulation, double NoteTimeMs, double SongTimeMs) const;
-
-	int32 PaintBackground(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession* Session) const;
-	int32 PaintLanes(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const;
-	int32 PaintNotes(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const;
-	int32 PaintPowerups(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const;
-	int32 PaintShip(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const;
-	int32 PaintEffects(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer) const;
-	int32 PaintHud(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const;
-	int32 PaintCenterMessages(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer, const FAmplitudeSession& Session) const;
-	int32 PaintAttract(const FLayout& Layout, const FGeometry& Geometry, FSlateWindowElementList& Out, int32 Layer) const;
-
-	FLinearColor Tint(const FLayout& Layout, const FLinearColor& Color) const;
-	void SpawnBurst(int32 Lane, float Y, const FLinearColor& Color, int32 Count, float Speed, bool bDownward);
-	void AddPopup(const FString& Text, const FLinearColor& Color, int32 Lane, float Y, float Size, float Life);
+	void AddPopup(const FString& Text, const FLinearColor& Color, const FVector& WorldLocation, float Size, float Life, const FVector2D& Offset = FVector2D::ZeroVector);
 	void AddBanner(const FString& Text, const FLinearColor& Color, float Life = 1.2f);
-	void AddShake(float Pixels);
+	bool ProjectToLocal(const FVector& WorldLocation, const FVector2D& LocalSize, FVector2D& OutLocal) const;
+	FVector GetHitPoint(int32 Lane, int32 Column) const;
+	FVector GetShipLocation() const;
 	const FAmplitudeSession* GetSession() const;
-	float GetHitLineNormalized() const;
-	float GetShipNormalized() const;
 
 	TWeakObjectPtr<AAmplitudeDirector> Director;
 
-	TArray<FParticle> Particles;
 	TArray<FPopup> Popups;
 	TArray<FBanner> Banners;
-	TArray<FRing> Rings;
-	float LaneFlash[6] = {};
-	float LaneMissFlash[6] = {};
-	float ShakeAmplitude = 0.0f;
-	FVector2D ShakeOffset = FVector2D::ZeroVector;
-	float ZoomPulse = 0.0f;
 	float FeverFlash = 0.0f;
-	float ShipTrail = 0.0f;
-	int32 TrailFromLane = -1;
+	float ScorePulse = 0.0f;
 	double Time = 0.0;
 	float SmoothedFps = 60.0f;
 };

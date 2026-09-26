@@ -47,7 +47,7 @@ void FAmplitudeSession::Start(double WallSeconds)
 	LastWallSeconds = WallSeconds;
 	AppliedRate = 1.0;
 	bPaused = false;
-	PendingPresses.Reset();
+	PendingInputs.Reset();
 
 	if (UAmplitudeStemPlayerComponent* Player = StemPlayer.Get())
 	{
@@ -72,19 +72,33 @@ void FAmplitudeSession::Tick(double WallSeconds)
 	Clock.Advance(WallSeconds, AppliedRate);
 	SyncToAudio(WallSeconds);
 
-	// Buffered input: judge each press at the song time it was made, in order.
-	PendingPresses.Sort([](const FQueuedPress& A, const FQueuedPress& B) { return A.WallSeconds < B.WallSeconds; });
-	for (const FQueuedPress& Press : PendingPresses)
+	// Buffered input: apply each move and press at the song time it was made, in order.
+	PendingInputs.StableSort([](const FQueuedInput& A, const FQueuedInput& B) { return A.WallSeconds < B.WallSeconds; });
+	for (const FQueuedInput& Input : PendingInputs)
 	{
-		if (WallSeconds - Press.WallSeconds > MaxPressAgeSeconds)
+		if (WallSeconds - Input.WallSeconds > MaxPressAgeSeconds)
 		{
 			continue;
 		}
-		Simulation.PressLane(Press.Lane, Clock.TimeAtWall(Press.WallSeconds));
-		const double LatencyMs = (WallSeconds - Press.WallSeconds) * 1000.0;
-		InputLatencyMs = InputLatencyMs <= 0.0 ? LatencyMs : FMath::Lerp(InputLatencyMs, LatencyMs, 0.2);
+		const double SongTimeMs = Clock.TimeAtWall(Input.WallSeconds);
+		switch (Input.Kind)
+		{
+		case EInputKind::Step:
+			Simulation.StepShip(Input.Value, SongTimeMs);
+			break;
+		case EInputKind::Jump:
+			Simulation.MoveShip(Input.Value, SongTimeMs);
+			break;
+		case EInputKind::Fire:
+		{
+			Simulation.PressColumn(Input.Value, SongTimeMs);
+			const double LatencyMs = (WallSeconds - Input.WallSeconds) * 1000.0;
+			InputLatencyMs = InputLatencyMs <= 0.0 ? LatencyMs : FMath::Lerp(InputLatencyMs, LatencyMs, 0.2);
+			break;
+		}
+		}
 	}
-	PendingPresses.Reset();
+	PendingInputs.Reset();
 
 	// 3-8: spawning, note progression, auto-miss, capture, powerups and energy all live in the simulation.
 	Simulation.Advance(Clock.GetTimeMs(), RealDeltaMs);
@@ -107,12 +121,27 @@ void FAmplitudeSession::Tick(double WallSeconds)
 	}
 }
 
-void FAmplitudeSession::QueuePress(int32 Lane, double WallSeconds)
+void FAmplitudeSession::QueueInput(EInputKind Kind, int32 Value, double WallSeconds)
 {
 	if (!bPaused && !Simulation.IsFinished())
 	{
-		PendingPresses.Add({Lane, WallSeconds});
+		PendingInputs.Add({Kind, Value, WallSeconds});
 	}
+}
+
+void FAmplitudeSession::QueueStep(int32 Direction, double WallSeconds)
+{
+	QueueInput(EInputKind::Step, Direction, WallSeconds);
+}
+
+void FAmplitudeSession::QueueFire(int32 Column, double WallSeconds)
+{
+	QueueInput(EInputKind::Fire, Column, WallSeconds);
+}
+
+void FAmplitudeSession::QueueJump(int32 Lane, double WallSeconds)
+{
+	QueueInput(EInputKind::Jump, Lane, WallSeconds);
 }
 
 void FAmplitudeSession::SetPaused(bool bPause, double WallSeconds)
@@ -122,7 +151,7 @@ void FAmplitudeSession::SetPaused(bool bPause, double WallSeconds)
 		return;
 	}
 	bPaused = bPause;
-	PendingPresses.Reset();
+	PendingInputs.Reset();
 
 	UAmplitudeStemPlayerComponent* Player = StemPlayer.Get();
 	if (Player != nullptr)

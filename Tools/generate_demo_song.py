@@ -7,6 +7,8 @@ The song is synthesised from scratch (no samples), so it can be regenerated anyw
                  (0 drums, 1 synth, 2 bass, 3 vocals, 4 pad, 5 fx, 6 master/click reference)
   * song.json  - metadata + chart (spec 14.1). The chart is derived from the same musical events
                  that are rendered into the audio, so every note lines up with an instrument hit.
+                 Every instrument gets its own track of gems in three columns (left / middle /
+                 right, roughly low to high), so the player can hop to whichever lane they like.
 
 Usage:
     python3 Tools/generate_demo_song.py                 # writes Songs/neon_drive/{song.json,audio.wav}
@@ -48,12 +50,11 @@ SECTION_B = range(10, 18)
 SECTION_C = range(18, 26)
 OUTRO = range(26, 28)
 
-# Lanes featured in the chart for each 2-bar phrase (Amplitude-style: the player hops between phrases).
-PHRASES = {
-    2: ["drums"], 4: ["bass"], 6: ["drums", "bass"], 8: ["bass", "pad"],
-    10: ["synth"], 12: ["vocals"], 14: ["synth", "drums"], 16: ["vocals", "fx"],
-    18: ["drums", "fx"], 20: ["synth", "pad"], 22: ["bass", "vocals"], 24: ["drums", "synth", "fx"],
-}
+LEFT, MIDDLE, RIGHT = 1, 2, 4  # column bits
+
+# Chart tuning for the demo: a capture needs a full two-bar phrase and lasts four bars, so the
+# player keeps hopping between tracks the way the song builds up.
+RULES = {"capture_streak": 8, "capture_duration_ms": round(4 * BAR * 1000.0)}
 
 
 def midi_to_hz(note):
@@ -139,12 +140,13 @@ class Track:
 
 
 def render_song(length_s):
-    """Returns (tracks, chart_events). chart_events[lane] = list of (time_s, strength)."""
+    """Returns (tracks, chart_events). chart_events[lane] = {time_ms: column bits}."""
     tracks = {name: Track(length_s, seed) for seed, name in enumerate(LANES)}
-    events = {name: [] for name in LANES}
+    events = {name: {} for name in LANES}
 
-    def note(lane, time_s):
-        events[lane].append(round(time_s * 1000.0, 1))
+    def note(lane, time_s, columns):
+        time_ms = round(time_s * 1000.0, 1)
+        events[lane][time_ms] = events[lane].get(time_ms, 0) | columns
 
     drums, synth, bass, vocals, pad, fx = (tracks[name] for name in LANES)
 
@@ -165,8 +167,12 @@ def render_song(length_s):
                 drums.kick(beat_time(bar, beat))
             for beat in (1, 3):
                 drums.snare(beat_time(bar, beat))
-            for beat in sorted(set(kicks + [1, 3])):
-                note("drums", beat_time(bar, beat))
+            # Kick on the left button, snare in the middle, the closing open hat on the right.
+            for beat in kicks:
+                note("drums", beat_time(bar, beat), LEFT)
+            for beat in (1, 3):
+                note("drums", beat_time(bar, beat), MIDDLE)
+            note("drums", beat_time(bar, 3.5), RIGHT)
 
         # ---- Bass: driving eighths with an octave on the off-beats
         if in_a or in_b or in_c:
@@ -174,8 +180,9 @@ def render_song(length_s):
                 midi = root + (12 if eighth % 2 else 0)
                 bass.tone(beat_time(bar, eighth * 0.5), BEAT * 0.45, midi_to_hz(midi), 0.26, wave_shape="saw",
                           attack=0.003, decay=0.25, lowpass=0.12)
-            for beat in (0, 1, 1.5, 2, 3):
-                note("bass", beat_time(bar, beat))
+            # Root on the left, the off-beat octave jump on the right.
+            for beat, column in ((0, LEFT), (1, MIDDLE), (1.5, RIGHT), (2, MIDDLE), (3, LEFT)):
+                note("bass", beat_time(bar, beat), column)
 
         # ---- Synth: sixteenth-note arpeggio through the chord
         if in_b or in_c:
@@ -184,8 +191,10 @@ def render_song(length_s):
                 midi = arp[sixteenth % 4]
                 synth.tone(beat_time(bar, sixteenth * 0.25), BEAT * 0.22, midi_to_hz(midi), 0.13, wave_shape="square",
                            decay=0.07, lowpass=0.28)
-            for eighth in (0, 2, 3, 4, 6):
-                note("synth", beat_time(bar, eighth * 0.5))
+            # Arpeggio steps: chord root left, third/fifth middle, octave right.
+            for sixteenth in (0, 3, 6, 8, 11, 14):
+                column = (LEFT, MIDDLE, MIDDLE, RIGHT)[sixteenth % 4]
+                note("synth", beat_time(bar, sixteenth * 0.25), column)
 
         # ---- Pad: sustained chord, fading in during the intro
         pad_amp = 0.035 if bar not in INTRO else 0.02 + 0.01 * bar
@@ -193,24 +202,25 @@ def render_song(length_s):
             for detune in (0.996, 1.004):
                 pad.tone(beat_time(bar), BAR + 0.25, midi_to_hz(midi) * detune, pad_amp, wave_shape="saw",
                          attack=0.25, release=0.3, lowpass=0.05)
-        note("pad", beat_time(bar))
+        pad_column = (MIDDLE, LEFT, RIGHT, MIDDLE)[bar % 4]
+        note("pad", beat_time(bar), pad_column)
         if in_c:
-            note("pad", beat_time(bar, 2))
+            note("pad", beat_time(bar, 2), RIGHT if pad_column == LEFT else LEFT)
 
         # ---- FX: impacts, zaps and risers
         if bar in (SECTION_A.start, SECTION_B.start, SECTION_C.start):
             fx.tone(beat_time(bar), 0.6, 60.0, 0.4, decay=0.25)
             fx.tone(beat_time(bar), 0.3, 1.0, 0.18, wave_shape="noise", decay=0.1, lowpass=0.3)
-            note("fx", beat_time(bar))
+            note("fx", beat_time(bar), LEFT | MIDDLE | RIGHT)
         if in_c and bar % 2 == 1:
-            for beat in (1.5, 3.5):
+            for beat, column in ((1.5, LEFT), (3.5, RIGHT)):
                 fx.tone(beat_time(bar, beat), 0.15, 2200.0, 0.12, freq_end=220.0, decay=0.08)
-                note("fx", beat_time(bar, beat))
+                note("fx", beat_time(bar, beat), column)
         if bar + 1 in (SECTION_B.start, SECTION_C.start, OUTRO.start):
             # One-bar noise riser into the next section.
             fx.tone(beat_time(bar), BAR, 1.0, 0.16, wave_shape="noise", attack=BAR * 0.9, release=0.02,
                     lowpass=lambda t: 0.02 + 0.5 * min(1.0, t / BAR))
-            note("fx", beat_time(bar, 3))
+            note("fx", beat_time(bar, 3), MIDDLE)
 
     # ---- Vocals: a sung-sounding lead (sine + harmonics + vibrato) over sections B and C
     melody = [  # (bar offset, beat, length in beats, midi)
@@ -224,55 +234,35 @@ def render_song(length_s):
             start = beat_time(phrase_start + bar_offset, beat)
             vocals.tone(start, length * BEAT * 0.95, midi_to_hz(midi), 0.14, attack=0.04, release=0.08,
                         vibrato=0.012, harmonics=[(2, 0.35), (3, 0.15), (4, 0.05)])
-            note("vocals", start)
+            note("vocals", start, LEFT if midi <= 69 else (MIDDLE if midi <= 72 else RIGHT))
 
     # Final hit on every instrument.
     final = beat_time(OUTRO.stop - 1, 0)
     fx.tone(final, 1.8, 55.0, 0.45, decay=0.6)
     drums.kick(final)
-    note("drums", final)
-    note("fx", final)
+    note("drums", final, LEFT)
+    note("fx", final, LEFT | MIDDLE | RIGHT)
 
     return tracks, events
 
 
 def build_chart(events):
-    """Keeps only the featured lanes of each phrase and merges simultaneous notes into chords.
-
-    Chords are kept on bar downbeats only; elsewhere the phrase's first featured lane wins, which
-    keeps Normal readable. Harder difficulties add chords procedurally (extra_chord_ratio).
-    """
-    featured = {}
-    for start_bar, lanes in PHRASES.items():
-        for bar in (start_bar, start_bar + 1):
-            featured[bar] = lanes
-    # Intro/outro: pad and fx carry the melody-less bars.
-    for bar in list(INTRO) + list(OUTRO):
-        featured[bar] = ["pad", "fx"]
-
-    by_time = {}
-    for lane in LANES:
-        for time_ms in events[lane]:
-            bar = min(BARS - 1, int(time_ms / 1000.0 / BAR + 1e-6))
-            is_final = bar == OUTRO.stop - 1 and lane in ("drums", "fx")
-            if lane not in featured.get(bar, []) and not is_final:
-                continue
-            by_time.setdefault(time_ms, set()).add(lane)
+    """One chart entry per instrument hit: {"lane": 1-6, "column": 1-3 or [..] for chords}."""
+    entries = []
+    for lane_index, lane in enumerate(LANES):
+        for time_ms, bits in events[lane].items():
+            entries.append((time_ms, lane_index, bits))
+    entries.sort()
 
     notes = []
-    for time_ms in sorted(by_time):
-        bar = min(BARS - 1, int(time_ms / 1000.0 / BAR + 1e-6))
-        downbeat = abs(time_ms - beat_time(bar) * 1000.0) < 1.0
-        order = featured.get(bar, LANES)
-        lanes = sorted(by_time[time_ms], key=lambda name: order.index(name) if name in order else len(order))
-        if not downbeat:
-            lanes = lanes[:1]
-        lane_numbers = sorted(LANES.index(name) + 1 for name in lanes[:3])
+    for time_ms, lane_index, bits in entries:
+        columns = [column + 1 for column in range(3) if bits & (1 << column)]
         notes.append({
             "id": len(notes) + 1,
             "time_ms": time_ms,
-            "lane": lane_numbers[0] if len(lane_numbers) == 1 else lane_numbers,
-            "type": {1: "single", 2: "double"}.get(len(lane_numbers), "triple"),
+            "lane": lane_index + 1,
+            "column": columns[0] if len(columns) == 1 else columns,
+            "type": {1: "single", 2: "double"}.get(len(columns), "triple"),
         })
     return notes
 
@@ -306,6 +296,7 @@ def write_json(path, notes, length_s):
             "insane": {"note_density_multiplier": 2.0, "note_speed": 900, "perfect_window_ms": 50, "good_window_ms": 200,
                        "energy_on_good": 1, "energy_on_miss": -4},
         },
+        "rules": RULES,
         "notes": notes,
         "events": {
             "beat_markers": [{"time_ms": round(beat * BEAT * 1000.0, 1), "beat": beat} for beat in range(BARS * 4)],

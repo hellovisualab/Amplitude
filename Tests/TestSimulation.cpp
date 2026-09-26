@@ -10,25 +10,30 @@ using namespace Amp;
 
 namespace
 {
-	FNote MakeNote(int32_t Lane, double TimeMs)
+	constexpr int32_t Left = 0;
+	constexpr int32_t Middle = 1;
+	constexpr int32_t Right = 2;
+
+	FNote MakeNote(int32_t Lane, double TimeMs, int32_t Column = Middle)
 	{
 		FNote Note;
 		Note.Lane = Lane;
+		Note.Column = Column;
 		Note.TimeMs = TimeMs;
 		return Note;
 	}
 
-	std::vector<FNote> LaneNotes(int32_t Lane, double StartMs, double SpacingMs, int32_t Count)
+	std::vector<FNote> LaneNotes(int32_t Lane, double StartMs, double SpacingMs, int32_t Count, int32_t Column = Middle)
 	{
 		std::vector<FNote> Notes;
 		for (int32_t Index = 0; Index < Count; ++Index)
 		{
-			Notes.push_back(MakeNote(Lane, StartMs + SpacingMs * Index));
+			Notes.push_back(MakeNote(Lane, StartMs + SpacingMs * Index, Column));
 		}
 		return Notes;
 	}
 
-	/** A simulation with powerup spawning disabled so tests are fully scripted. */
+	/** A simulation with powerup spawning disabled so tests are fully scripted. The ship starts in lane 2. */
 	struct FHarness
 	{
 		FSimulation Sim;
@@ -57,10 +62,33 @@ namespace
 			Sim.DrainEvents(Events);
 		}
 
-		void Press(int32_t Lane, double TimeMs)
+		/** Fires a gem button in the ship's current lane. */
+		void Press(int32_t Column, double TimeMs)
 		{
 			AdvanceTo(TimeMs);
-			Sim.PressLane(Lane, TimeMs);
+			Sim.PressColumn(Column, TimeMs);
+			Sim.DrainEvents(Events);
+		}
+
+		/** Jumps to a lane and fires the middle button. */
+		void PressLane(int32_t Lane, double TimeMs, int32_t Column = Middle)
+		{
+			AdvanceTo(TimeMs);
+			Sim.PressLane(Lane, Column, TimeMs);
+			Sim.DrainEvents(Events);
+		}
+
+		void Move(int32_t Lane, double TimeMs)
+		{
+			AdvanceTo(TimeMs);
+			Sim.MoveShip(Lane, TimeMs);
+			Sim.DrainEvents(Events);
+		}
+
+		void Step(int32_t Direction, double TimeMs)
+		{
+			AdvanceTo(TimeMs);
+			Sim.StepShip(Direction, TimeMs);
 			Sim.DrainEvents(Events);
 		}
 
@@ -88,15 +116,16 @@ AMP_TEST(PerfectAndGoodHitsScoreAndEnergy)
 	std::vector<FNote> Notes = {MakeNote(0, 1000.0), MakeNote(1, 2000.0)};
 	FHarness H(Notes);
 	EXPECT_EQ(H.Sim.GetEnergy(), 50);
+	EXPECT_EQ(H.Sim.GetShipLane(), 2);
 
-	H.Press(0, 1040.0);
+	H.PressLane(0, 1040.0);
 	const FEvent* Hit = H.LastEvent(EEventType::NoteHit);
-	EXPECT_TRUE(Hit != nullptr && Hit->Judgement == EJudgement::Perfect);
+	EXPECT_TRUE(Hit != nullptr && Hit->Judgement == EJudgement::Perfect && Hit->Column == Middle);
 	EXPECT_EQ(H.Sim.GetScore(), 10);
 	EXPECT_EQ(H.Sim.GetEnergy(), 52);
 	EXPECT_EQ(H.Sim.GetShipLane(), 0);
 
-	H.Press(1, 1800.0); // 200ms early: Good
+	H.PressLane(1, 1800.0); // 200ms early: Good
 	Hit = H.LastEvent(EEventType::NoteHit);
 	EXPECT_TRUE(Hit != nullptr && Hit->Judgement == EJudgement::Good);
 	EXPECT_NEAR(Hit->OffsetMs, -200.0, 1e-9);
@@ -108,21 +137,47 @@ AMP_TEST(WindowBoundaries)
 {
 	for (const double Offset : {-100.0, 100.0})
 	{
-		FHarness H({MakeNote(2, 1000.0)});
-		H.Press(2, 1000.0 + Offset);
+		FHarness H({MakeNote(2, 1000.0, Right)});
+		H.Press(Right, 1000.0 + Offset);
 		EXPECT_TRUE(H.Sim.GetNotes()[0].Judgement == EJudgement::Perfect);
 	}
 	for (const double Offset : {-300.0, 299.0, 150.0})
 	{
-		FHarness H({MakeNote(2, 1000.0)});
-		H.Press(2, 1000.0 + Offset);
+		FHarness H({MakeNote(2, 1000.0, Left)});
+		H.Press(Left, 1000.0 + Offset);
 		EXPECT_TRUE(H.Sim.GetNotes()[0].Judgement == EJudgement::Good);
 	}
 }
 
-AMP_TEST(AutoMissWhenNotePasses)
+AMP_TEST(ShipStepsBetweenLanesAndStopsAtEdges)
+{
+	FHarness H({MakeNote(0, 60000.0)});
+	H.Step(-1, 100.0);
+	H.Step(-1, 200.0);
+	EXPECT_EQ(H.Sim.GetShipLane(), 0);
+	H.Step(-1, 300.0); // already at the left edge
+	EXPECT_EQ(H.Sim.GetShipLane(), 0);
+	EXPECT_EQ(H.CountEvents(EEventType::ShipMoved), 2);
+	const FEvent* Moved = H.LastEvent(EEventType::ShipMoved);
+	EXPECT_TRUE(Moved != nullptr && Moved->Lane == 0 && Moved->Count == 1 && !Moved->bAuto);
+
+	for (int32_t Step = 0; Step < 8; ++Step)
+	{
+		H.Step(1, 400.0 + 10.0 * Step);
+	}
+	EXPECT_EQ(H.Sim.GetShipLane(), NumLanes - 1);
+	EXPECT_EQ(H.CountEvents(EEventType::ShipMoved), 2 + NumLanes - 1);
+
+	// The lane history remembers where the ship was.
+	EXPECT_EQ(H.Sim.GetShipLaneAt(50.0), 2);
+	EXPECT_EQ(H.Sim.GetShipLaneAt(250.0), 0);
+	EXPECT_EQ(H.Sim.GetShipLaneAt(415.0), 2);
+}
+
+AMP_TEST(AutoMissOnlyInTheShipLane)
 {
 	FHarness H({MakeNote(3, 1000.0)});
+	H.Move(3, 0.0);
 	H.AdvanceTo(1300.0);
 	EXPECT_TRUE(H.Sim.GetNotes()[0].IsPending());
 	H.AdvanceTo(1310.0);
@@ -132,30 +187,105 @@ AMP_TEST(AutoMissWhenNotePasses)
 	EXPECT_EQ(H.CountEvents(EEventType::NoteMissed), 1);
 }
 
+AMP_TEST(NotesInOtherLanesAreSkippedForFree)
+{
+	FHarness H(LaneNotes(4, 1000.0, 250.0, 6));
+	H.AdvanceTo(3000.0);
+	EXPECT_EQ(H.CountEvents(EEventType::NoteSkipped), 6);
+	EXPECT_EQ(H.CountEvents(EEventType::NoteMissed), 0);
+	EXPECT_EQ(H.Sim.GetEnergy(), 50);
+	EXPECT_FALSE(H.Sim.GetLane(4).bMuted);
+	EXPECT_EQ(H.Sim.GetStats().Skipped, 6);
+	EXPECT_EQ(H.Sim.GetLane(4).Skipped, 6);
+	EXPECT_TRUE(H.Sim.GetNotes()[0].Judgement == EJudgement::Skipped);
+
+	const FRunSummary Summary = H.Sim.Summarize();
+	EXPECT_EQ(Summary.Skipped, 6);
+	EXPECT_EQ(Summary.Miss, 0);
+}
+
+AMP_TEST(LaneOccupiedAtNoteTimeDecidesMissOrSkip)
+{
+	// In the lane when the gem reaches the hit line, then leaving without firing: a miss.
+	FHarness Leave({MakeNote(3, 1000.0)});
+	Leave.Move(3, 500.0);
+	Leave.Move(4, 1100.0);
+	Leave.AdvanceTo(1400.0);
+	EXPECT_TRUE(Leave.Sim.GetNotes()[0].Judgement == EJudgement::Miss);
+
+	// Arriving just after the gem passed the line: it is skipped, but can still be hit in the window.
+	FHarness Late({MakeNote(3, 1000.0), MakeNote(3, 5000.0)});
+	Late.Move(3, 1100.0);
+	Late.Press(Middle, 1150.0);
+	EXPECT_TRUE(Late.Sim.GetNotes()[0].Judgement == EJudgement::Good);
+
+	FHarness Pass({MakeNote(3, 1000.0)});
+	Pass.Move(3, 1100.0);
+	Pass.AdvanceTo(1400.0);
+	EXPECT_TRUE(Pass.Sim.GetNotes()[0].Judgement == EJudgement::Skipped);
+	EXPECT_EQ(Pass.Sim.GetEnergy(), 50);
+}
+
 AMP_TEST(EarlyPressMissesAndGhostPressIsFree)
 {
 	FHarness H({MakeNote(1, 1000.0)});
-	H.Press(1, 500.0); // 500ms early: outside the early-miss window (400ms), ghost press
+	H.PressLane(1, 500.0); // 500ms early: outside the early-miss window (400ms), ghost press
 	EXPECT_EQ(H.CountEvents(EEventType::GhostPress), 1);
 	EXPECT_EQ(H.Sim.GetEnergy(), 50);
 	EXPECT_TRUE(H.Sim.GetNotes()[0].IsPending());
 
-	H.Press(1, 650.0); // 350ms early: inside the early-miss window, costs the note
+	H.PressLane(1, 650.0); // 350ms early: inside the early-miss window, costs the note
 	EXPECT_TRUE(H.Sim.GetNotes()[0].Judgement == EJudgement::Miss);
 	EXPECT_EQ(H.Sim.GetEnergy(), 47);
 
-	H.Press(4, 700.0); // empty lane
+	H.PressLane(4, 700.0); // empty lane
 	EXPECT_EQ(H.CountEvents(EEventType::GhostPress), 2);
+	const FEvent* Ghost = H.LastEvent(EEventType::GhostPress);
+	EXPECT_TRUE(Ghost != nullptr && Ghost->Lane == 4 && Ghost->Column == Middle);
 }
 
-AMP_TEST(ClosestNoteIsJudged)
+AMP_TEST(WrongButtonLosesTheGem)
 {
-	FHarness H({MakeNote(0, 1000.0), MakeNote(0, 1200.0)});
-	H.Press(0, 1190.0);
+	FHarness H({MakeNote(2, 1000.0, Left), MakeNote(2, 3000.0, Right)});
+	H.Press(Right, 1020.0); // the left gem is in the window: wrong button
+	EXPECT_TRUE(H.Sim.GetNotes()[0].Judgement == EJudgement::Miss);
+	EXPECT_EQ(H.Sim.GetEnergy(), 47);
+	EXPECT_TRUE(H.Sim.GetNotes()[1].IsPending());
+
+	// Early presses only cost a gem of the same column.
+	H.Press(Left, 2650.0);
+	EXPECT_TRUE(H.Sim.GetNotes()[1].IsPending());
+	EXPECT_EQ(H.CountEvents(EEventType::GhostPress), 1);
+	H.Press(Right, 2650.0);
+	EXPECT_TRUE(H.Sim.GetNotes()[1].Judgement == EJudgement::Miss);
+}
+
+AMP_TEST(ClosestNoteOfTheColumnIsJudged)
+{
+	FHarness H({MakeNote(0, 1000.0), MakeNote(0, 1200.0), MakeNote(0, 1210.0, Right)});
+	H.Move(0, 0.0);
+	H.Press(Middle, 1190.0);
 	EXPECT_TRUE(H.Sim.GetNotes()[1].Judgement == EJudgement::Perfect);
 	EXPECT_TRUE(H.Sim.GetNotes()[0].IsPending());
+	H.Press(Right, 1200.0);
+	EXPECT_TRUE(H.Sim.GetNotes()[2].Judgement == EJudgement::Perfect);
 	H.AdvanceTo(1400.0);
 	EXPECT_TRUE(H.Sim.GetNotes()[0].Judgement == EJudgement::Miss);
+}
+
+AMP_TEST(ChordsNeedEveryButton)
+{
+	std::vector<FChartEntry> Chart = {{1, 1000.0, 2, 0b011, ENoteType::Double}, {2, 2000.0, 2, 0b110, ENoteType::Double}};
+	FHarness H(ExpandChart(Chart));
+	EXPECT_EQ(H.Sim.GetNotes().size(), size_t(4));
+	H.Press(Left, 1000.0);
+	H.Press(Middle, 1005.0);
+	EXPECT_EQ(H.Sim.GetStats().Perfect, 2);
+
+	H.Press(Right, 2000.0); // only half of the second chord
+	H.AdvanceTo(2400.0);
+	EXPECT_EQ(H.Sim.GetStats().Perfect, 3);
+	EXPECT_EQ(H.Sim.GetStats().Miss, 1);
 }
 
 AMP_TEST(EnergyIsCappedAndGameOverAtZero)
@@ -164,14 +294,14 @@ AMP_TEST(EnergyIsCappedAndGameOverAtZero)
 	FHarness Up(LaneNotes(0, 1000.0, 400.0, 40));
 	for (int32_t Index = 0; Index < 40; ++Index)
 	{
-		Up.Press(0, 1000.0 + 400.0 * Index);
+		Up.PressLane(0, 1000.0 + 400.0 * Index);
 	}
 	EXPECT_EQ(Up.Sim.GetEnergy(), 100);
 
 	std::vector<FNote> Many;
 	for (int32_t Index = 0; Index < 30; ++Index)
 	{
-		Many.push_back(MakeNote(Index % NumLanes, 1000.0 + 200.0 * Index));
+		Many.push_back(MakeNote(2, 1000.0 + 200.0 * Index, Index % NumColumns));
 	}
 	FHarness Down(Many);
 	Down.AdvanceTo(10000.0);
@@ -183,8 +313,10 @@ AMP_TEST(EnergyIsCappedAndGameOverAtZero)
 
 	// Nothing changes after game over.
 	const int64_t Score = Down.Sim.GetScore();
-	Down.Sim.PressLane(0, 10000.0);
+	Down.Sim.PressColumn(Middle, 10000.0);
+	Down.Sim.StepShip(1, 10000.0);
 	EXPECT_EQ(Down.Sim.GetScore(), Score);
+	EXPECT_EQ(Down.Sim.GetShipLane(), 2);
 }
 
 AMP_TEST(PerLaneCombosAndMultiplier)
@@ -193,50 +325,84 @@ AMP_TEST(PerLaneCombosAndMultiplier)
 	std::vector<FNote> Other = LaneNotes(1, 1250.0, 500.0, 3);
 	Notes.insert(Notes.end(), Other.begin(), Other.end());
 	FHarness H(Notes);
-	H.Press(0, 1000.0);
-	H.Press(1, 1250.0);
-	H.Press(0, 1500.0);
+	H.PressLane(0, 1000.0);
+	H.PressLane(1, 1250.0);
+	H.PressLane(0, 1500.0);
 	EXPECT_EQ(H.Sim.GetLane(0).Combo, 2);
 	EXPECT_EQ(H.Sim.GetLane(1).Combo, 1);
-	H.AdvanceTo(2100.0); // lane 1 note at 1750 is missed (deadline 2050)
-	EXPECT_EQ(H.Sim.GetLane(1).Combo, 0);
-	EXPECT_EQ(H.Sim.GetLane(0).Combo, 2);
+	H.AdvanceTo(2100.0); // lane 1 gem at 1750 passes while the ship is in lane 0: skipped, combo kept
+	EXPECT_EQ(H.Sim.GetLane(1).Combo, 1);
+	EXPECT_EQ(H.Sim.GetLane(1).CaptureStreak, 0);
+	H.AdvanceTo(2400.0); // lane 0 gem at 2000 is missed
+	EXPECT_EQ(H.Sim.GetLane(0).Combo, 0);
+	EXPECT_EQ(H.Sim.GetLane(1).Combo, 1);
 }
 
 AMP_TEST(ComboMultiplierAppliesAtThreshold)
 {
 	// On Mellow 1.2x starts at a combo of 3, below the capture threshold of 4, so the tier shows up before any auto-play.
 	FHarness H(LaneNotes(0, 1000.0, 500.0, 3), EDifficulty::Mellow);
-	H.Press(0, 1000.0);
-	H.Press(0, 1500.0);
+	H.PressLane(0, 1000.0);
+	H.PressLane(0, 1500.0);
 	EXPECT_EQ(H.Sim.GetScore(), 20);
-	H.Press(0, 2000.0);
+	H.PressLane(0, 2000.0);
 	EXPECT_EQ(H.Sim.GetScore(), 32); // third hit: 10 x 1.2
 }
 
-AMP_TEST(LaneCaptureAfterFourHits)
+AMP_TEST(LaneCaptureAfterFourHitsAndAutoAdvance)
 {
 	FHarness H(LaneNotes(2, 1000.0, 500.0, 12));
 	for (int32_t Index = 0; Index < 3; ++Index)
 	{
-		H.Press(2, 1000.0 + 500.0 * Index);
+		H.Press(Middle, 1000.0 + 500.0 * Index);
 	}
 	EXPECT_FALSE(H.Sim.GetLane(2).bCaptured);
 	EXPECT_EQ(H.Sim.GetEnergy(), 56);
 
-	H.Press(2, 2500.0);
+	H.Press(Middle, 2500.0);
 	EXPECT_TRUE(H.Sim.GetLane(2).bCaptured);
 	EXPECT_EQ(H.CountEvents(EEventType::LaneCaptured), 1);
 	EXPECT_EQ(H.Sim.GetEnergy(), 56 + 2 - 5);
 	EXPECT_NEAR(H.Sim.GetCaptureRemainingMs(2), 30000.0, 1e-6);
 
+	// The Beat Blaster jumps on to the next free lane (to the right when nothing else is playing).
+	EXPECT_EQ(H.Sim.GetShipLane(), 3);
+	const FEvent* Moved = H.LastEvent(EEventType::ShipMoved);
+	EXPECT_TRUE(Moved != nullptr && Moved->bAuto && Moved->Count == 2);
+
 	// The remaining notes play themselves as Perfect hits and keep the combo going.
-	H.Sim.MoveShip(5);
 	H.AdvanceTo(7000.0);
 	EXPECT_EQ(H.Sim.GetStats().AutoHits, 8);
 	EXPECT_EQ(H.Sim.GetLane(2).Combo, 12);
 	EXPECT_EQ(H.Sim.GetEnergy(), 53 + 16);
 	EXPECT_EQ(H.Sim.GetStats().Miss, 0);
+	EXPECT_EQ(H.Sim.GetStats().Skipped, 0);
+}
+
+AMP_TEST(AutoAdvancePrefersLanesWithMusic)
+{
+	std::vector<FNote> Notes = LaneNotes(2, 1000.0, 500.0, 4);
+	std::vector<FNote> Left1 = LaneNotes(1, 4000.0, 500.0, 4);
+	std::vector<FNote> Right4 = LaneNotes(4, 3000.0, 500.0, 4);
+	Notes.insert(Notes.end(), Left1.begin(), Left1.end());
+	Notes.insert(Notes.end(), Right4.begin(), Right4.end());
+
+	FHarness H(Notes);
+	for (int32_t Index = 0; Index < 4; ++Index)
+	{
+		H.Press(Middle, 1000.0 + 500.0 * Index);
+	}
+	EXPECT_EQ(H.Sim.GetShipLane(), 1); // lane 3 is silent, lane 1 is the nearest with notes
+
+	FGameRules Rules;
+	Rules.bAutoAdvanceOnCapture = false;
+	FHarness Stay(Notes, EDifficulty::Normal, 0.0, Rules);
+	for (int32_t Index = 0; Index < 4; ++Index)
+	{
+		Stay.Press(Middle, 1000.0 + 500.0 * Index);
+	}
+	EXPECT_TRUE(Stay.Sim.GetLane(2).bCaptured);
+	EXPECT_EQ(Stay.Sim.GetShipLane(), 2);
 }
 
 AMP_TEST(CaptureExpiresAndNeedsFreshStreak)
@@ -247,55 +413,68 @@ AMP_TEST(CaptureExpiresAndNeedsFreshStreak)
 	FHarness H(Notes);
 	for (int32_t Index = 0; Index < 4; ++Index)
 	{
-		H.Press(4, 1000.0 + 500.0 * Index);
+		H.PressLane(4, 1000.0 + 500.0 * Index);
 	}
 	EXPECT_TRUE(H.Sim.GetLane(4).bCaptured);
+	EXPECT_EQ(H.Sim.GetShipLane(), 5);
 	H.AdvanceTo(32600.0);
 	EXPECT_FALSE(H.Sim.GetLane(4).bCaptured);
 	EXPECT_EQ(H.CountEvents(EEventType::CaptureExpired), 1);
 	EXPECT_TRUE(H.Sim.GetNotes()[4].bAutoPlayed);
 	EXPECT_TRUE(H.Sim.GetNotes()[5].IsPending());
 	EXPECT_EQ(H.Sim.GetLane(4).CaptureStreak, 0);
+	H.Move(4, 32700.0);
 	H.AdvanceTo(33400.0);
 	EXPECT_TRUE(H.Sim.GetNotes()[5].Judgement == EJudgement::Miss);
 }
 
-AMP_TEST(MissBreaksCaptureStreak)
+AMP_TEST(MissOrSkipBreaksCaptureStreak)
 {
-	std::vector<FNote> Notes = LaneNotes(0, 1000.0, 500.0, 8);
-	FHarness H(Notes);
-	H.Press(0, 1000.0);
-	H.Press(0, 1500.0);
-	H.Press(0, 2000.0);
+	FHarness H(LaneNotes(0, 1000.0, 500.0, 8));
+	H.Move(0, 0.0);
+	H.Press(Middle, 1000.0);
+	H.Press(Middle, 1500.0);
+	H.Press(Middle, 2000.0);
 	H.AdvanceTo(2900.0); // miss the 4th note
 	EXPECT_EQ(H.Sim.GetLane(0).CaptureStreak, 0);
-	H.Press(0, 3000.0);
-	H.Press(0, 3500.0);
-	H.Press(0, 4000.0);
+	H.Press(Middle, 3000.0);
+	H.Press(Middle, 3500.0);
+	H.Press(Middle, 4000.0);
 	EXPECT_FALSE(H.Sim.GetLane(0).bCaptured);
-	H.Press(0, 4500.0);
+	H.Press(Middle, 4500.0);
 	EXPECT_TRUE(H.Sim.GetLane(0).bCaptured);
+
+	// Leaving the lane mid-phrase: the skipped gem resets the streak.
+	FHarness Away(LaneNotes(0, 1000.0, 500.0, 8));
+	Away.PressLane(0, 1000.0);
+	Away.PressLane(0, 1500.0);
+	Away.PressLane(0, 2000.0);
+	Away.Move(1, 2200.0);
+	Away.PressLane(0, 3000.0); // 2500 was skipped
+	EXPECT_FALSE(Away.Sim.GetLane(0).bCaptured);
+	EXPECT_EQ(Away.Sim.GetLane(0).CaptureStreak, 1);
+	EXPECT_EQ(Away.Sim.GetLane(0).Combo, 4);
 }
 
 AMP_TEST(CaptureCostsEnergyAtLowEnergy)
 {
-	// Burn energy down to 5 with misses in other lanes, then build a streak.
+	// Burn energy down to 5 with misses, then build a streak.
 	std::vector<FNote> Notes;
 	for (int32_t Index = 0; Index < 15; ++Index)
 	{
-		Notes.push_back(MakeNote(1 + Index % 5, 1000.0 + 100.0 * Index));
+		Notes.push_back(MakeNote(2, 1000.0 + 100.0 * Index, Index % NumColumns));
 	}
-	std::vector<FNote> Streak = LaneNotes(0, 5000.0, 500.0, 4);
+	std::vector<FNote> Streak = LaneNotes(2, 5000.0, 500.0, 4);
 	Notes.insert(Notes.end(), Streak.begin(), Streak.end());
 	FHarness H(Notes);
 	H.AdvanceTo(4000.0);
 	EXPECT_EQ(H.Sim.GetEnergy(), 5); // 50 - 15 * 3
 	for (int32_t Index = 0; Index < 4; ++Index)
 	{
-		H.Press(0, 5000.0 + 500.0 * Index);
+		H.Press(Middle, 5000.0 + 500.0 * Index);
 	}
 	// 5 + 4 * 2 = 13 > 5: the capture is affordable and its cost is paid.
-	EXPECT_TRUE(H.Sim.GetLane(0).bCaptured);
+	EXPECT_TRUE(H.Sim.GetLane(2).bCaptured);
 	EXPECT_EQ(H.Sim.GetEnergy(), 8);
 }
 
@@ -304,16 +483,16 @@ AMP_TEST(CaptureDeniedWhenUnaffordable)
 	// With a 60 energy cost, a capture needs more than 60 energy; the streak keeps counting until then.
 	FGameRules Rules;
 	Rules.CaptureEnergyCost = 60;
-	FHarness H(LaneNotes(0, 1000.0, 500.0, 8), EDifficulty::Normal, 0.0, Rules);
+	FHarness H(LaneNotes(2, 1000.0, 500.0, 8), EDifficulty::Normal, 0.0, Rules);
 	for (int32_t Index = 0; Index < 5; ++Index)
 	{
-		H.Press(0, 1000.0 + 500.0 * Index);
+		H.Press(Middle, 1000.0 + 500.0 * Index);
 	}
-	EXPECT_FALSE(H.Sim.GetLane(0).bCaptured);
-	EXPECT_EQ(H.Sim.GetLane(0).CaptureStreak, 5);
+	EXPECT_FALSE(H.Sim.GetLane(2).bCaptured);
+	EXPECT_EQ(H.Sim.GetLane(2).CaptureStreak, 5);
 	EXPECT_EQ(H.Sim.GetEnergy(), 60);
-	H.Press(0, 3500.0);
-	EXPECT_TRUE(H.Sim.GetLane(0).bCaptured);
+	H.Press(Middle, 3500.0);
+	EXPECT_TRUE(H.Sim.GetLane(2).bCaptured);
 	EXPECT_EQ(H.Sim.GetEnergy(), 2);
 
 	// Auto-Capture obeys the same rule and fizzles at low energy.
@@ -327,6 +506,7 @@ AMP_TEST(CaptureDeniedWhenUnaffordable)
 AMP_TEST(MuteAfterFourMissesAndRecover)
 {
 	FHarness H(LaneNotes(5, 1000.0, 500.0, 6));
+	H.Move(5, 0.0);
 	H.AdvanceTo(2400.0); // 3 misses
 	EXPECT_FALSE(H.Sim.GetLane(5).bMuted);
 	H.AdvanceTo(2900.0); // 4th miss
@@ -335,31 +515,22 @@ AMP_TEST(MuteAfterFourMissesAndRecover)
 	EXPECT_EQ(H.CountEvents(EEventType::LaneMuted), 1);
 	EXPECT_EQ(H.Sim.GetLane(5).ConsecutiveMisses, 4);
 
-	H.Press(5, 3500.0);
+	H.Press(Middle, 3500.0);
 	EXPECT_FALSE(H.Sim.GetLane(5).bMuted);
 	EXPECT_EQ(H.CountEvents(EEventType::LaneUnmuted), 1);
 	EXPECT_EQ(H.Sim.GetLane(5).ConsecutiveMisses, 0);
 	EXPECT_TRUE(H.Sim.GetScore() > 0); // muted lanes still score
 }
 
-AMP_TEST(DoubleNotesNeedBothLanes)
+AMP_TEST(CapturedLanePressDoesNothing)
 {
-	std::vector<FChartEntry> Chart = {{1, 1000.0, 0b001001, ENoteType::Double}};
-	FHarness H(ExpandChart(Chart));
-	H.Press(0, 1000.0);
-	H.Press(3, 1005.0);
-	EXPECT_EQ(H.Sim.GetStats().Perfect, 2);
-	EXPECT_EQ(H.Sim.GetShipLane(), 3);
-}
-
-AMP_TEST(CapturedLanePressOnlyMovesShip)
-{
-	FHarness H(LaneNotes(0, 1000.0, 500.0, 6));
+	FHarness H(LaneNotes(2, 1000.0, 500.0, 6));
 	for (int32_t Index = 0; Index < 4; ++Index)
 	{
-		H.Press(0, 1000.0 + 500.0 * Index);
+		H.Press(Middle, 1000.0 + 500.0 * Index);
 	}
-	H.Press(0, 2700.0); // captured: no ghost, no early miss
+	H.Move(2, 2600.0);
+	H.Press(Middle, 2700.0); // captured: no ghost, no early miss
 	EXPECT_EQ(H.CountEvents(EEventType::GhostPress), 0);
 	EXPECT_TRUE(H.Sim.GetNotes()[4].IsPending());
 	H.AdvanceTo(3000.0);
@@ -370,16 +541,16 @@ AMP_TEST(Score2xStacksMultiplicatively)
 {
 	FHarness H({MakeNote(0, 1000.0), MakeNote(1, 1500.0), MakeNote(2, 20000.0)});
 	H.Sim.ApplyPowerup(EPowerupType::Score2x);
-	H.Press(0, 1000.0);
+	H.PressLane(0, 1000.0);
 	EXPECT_EQ(H.Sim.GetScore(), 20);
 	H.Sim.ApplyPowerup(EPowerupType::Score2x);
 	EXPECT_NEAR(H.Sim.GetGlobalMultiplier(), 4.0, 1e-9);
-	H.Press(1, 1500.0);
+	H.PressLane(1, 1500.0);
 	EXPECT_EQ(H.Sim.GetScore(), 60);
 	H.AdvanceTo(17000.0); // both 15s timers (real time) expire
 	EXPECT_EQ(H.Sim.GetScore2xStacks(), 0);
 	EXPECT_EQ(H.CountEvents(EEventType::PowerupEffectEnded), 2);
-	H.Press(2, 20000.0);
+	H.PressLane(2, 20000.0);
 	EXPECT_EQ(H.Sim.GetScore(), 70);
 }
 
@@ -394,14 +565,15 @@ AMP_TEST(FeverRampsAndBreaksOnMiss)
 	FHarness H(Notes, EDifficulty::Mellow);
 	H.Sim.ApplyPowerup(EPowerupType::Fever);
 	EXPECT_NEAR(H.Sim.GetGlobalMultiplier(), 1.5, 1e-9);
-	H.Press(0, 1000.0);
+	H.PressLane(0, 1000.0);
 	EXPECT_EQ(H.Sim.GetScore(), 15);
 	EXPECT_NEAR(H.Sim.GetGlobalMultiplier(), 1.6, 1e-9);
 	for (int32_t Index = 1; Index < 20; ++Index)
 	{
-		H.Press(Index % 3, 1000.0 + 300.0 * Index);
+		H.PressLane(Index % 3, 1000.0 + 300.0 * Index);
 	}
 	EXPECT_NEAR(H.Sim.GetGlobalMultiplier(), 3.0, 1e-9); // capped
+	H.Move(5, 7500.0);
 	H.AdvanceTo(8400.0 + 100.0); // miss the lane 5 note
 	EXPECT_FALSE(H.Sim.IsFeverActive());
 	EXPECT_NEAR(H.Sim.GetGlobalMultiplier(), 1.0, 1e-9);
@@ -412,11 +584,13 @@ AMP_TEST(ShieldAbsorbsOneMiss)
 {
 	FHarness H({MakeNote(0, 1000.0), MakeNote(1, 2000.0)});
 	H.Sim.ApplyPowerup(EPowerupType::Shield);
+	H.Move(0, 0.0);
 	H.AdvanceTo(1400.0);
 	EXPECT_EQ(H.Sim.GetEnergy(), 50);
 	EXPECT_FALSE(H.Sim.IsShieldActive());
 	EXPECT_EQ(H.CountEvents(EEventType::ShieldAbsorbedMiss), 1);
 	EXPECT_EQ(H.Sim.GetLane(0).Combo, 0); // the miss still counts
+	H.Move(1, 1500.0);
 	H.AdvanceTo(2400.0);
 	EXPECT_EQ(H.Sim.GetEnergy(), 47);
 
@@ -438,7 +612,7 @@ AMP_TEST(SlowMotionHalvesRateForTenSeconds)
 	EXPECT_NEAR(H.Sim.GetPlaybackRate(), 1.0, 1e-9);
 }
 
-AMP_TEST(LaneCleanerClearsChosenLane)
+AMP_TEST(LaneCleanerClearsTheShipLane)
 {
 	std::vector<FNote> Notes = LaneNotes(3, 2000.0, 250.0, 6);
 	Notes.push_back(MakeNote(1, 2100.0));
@@ -446,7 +620,9 @@ AMP_TEST(LaneCleanerClearsChosenLane)
 	H.AdvanceTo(1000.0);
 	H.Sim.ApplyPowerup(EPowerupType::LaneCleaner);
 	EXPECT_TRUE(H.Sim.IsLaneCleanerArmed());
-	H.Press(3, 1000.0); // selects lane 4 (index 3) instead of firing
+	H.Move(3, 1000.0); // moving picks the target...
+	EXPECT_TRUE(H.Sim.IsLaneCleanerArmed());
+	H.Press(Left, 1000.0); // ...any gem button fires the cleaner
 	EXPECT_FALSE(H.Sim.IsLaneCleanerArmed());
 	const FEvent* Cleared = H.LastEvent(EEventType::LaneCleared);
 	EXPECT_TRUE(Cleared != nullptr && Cleared->Lane == 3);
@@ -483,44 +659,57 @@ AMP_TEST(AutoCaptureTargetsNeediestLane)
 	H.Sim.ApplyPowerup(EPowerupType::AutoCapture);
 	EXPECT_TRUE(H.Sim.GetLane(2).bCaptured);
 	EXPECT_EQ(H.Sim.GetEnergy(), Energy - 5);
+	EXPECT_EQ(H.Sim.GetShipLane(), 4); // the ship's own lane was captured, so it moves on
 }
 
-AMP_TEST(PowerupCollectionAndDespawn)
+AMP_TEST(PowerupsAreCollectedByBeingInTheirLane)
 {
 	FHarness H({MakeNote(0, 60000.0)});
-	H.Sim.MoveShip(1);
-	H.Sim.ForceSpawnPowerup(EPowerupType::Shield, 1);
-	H.AdvanceTo(6000.0);
+	H.Sim.SpawnPowerup(EPowerupType::Shield, 2, 3000.0);
+	H.AdvanceTo(2700.0);
 	EXPECT_EQ(H.Sim.GetPowerups().size(), size_t(1));
-	// The ship sits at y = 0.9 with a 0.045 pickup band => ages 6840..7560ms of the 8s fall.
-	H.AdvanceTo(7000.0);
+	H.AdvanceTo(2760.0); // within 250ms of its arrival, with the ship in its lane
 	EXPECT_EQ(H.Sim.GetPowerups().size(), size_t(0));
 	EXPECT_EQ(H.Sim.GetScore(), 500);
 	EXPECT_TRUE(H.Sim.IsShieldActive());
 	EXPECT_EQ(H.Sim.GetStats().PowerupsCollected, 1);
 
 	FHarness Missed({MakeNote(0, 60000.0)});
-	Missed.Sim.MoveShip(4);
-	Missed.Sim.ForceSpawnPowerup(EPowerupType::Fever, 1);
-	Missed.AdvanceTo(8100.0);
+	Missed.Sim.SpawnPowerup(EPowerupType::Fever, 4, 3000.0);
+	Missed.AdvanceTo(3240.0);
+	EXPECT_EQ(Missed.Sim.GetPowerups().size(), size_t(1));
+	Missed.AdvanceTo(3260.0);
 	EXPECT_EQ(Missed.Sim.GetPowerups().size(), size_t(0));
 	EXPECT_EQ(Missed.CountEvents(EEventType::PowerupDespawned), 1);
 	EXPECT_EQ(Missed.Sim.GetScore(), 0);
 
-	// Jumping into the lane while the powerup is level with the ship picks it up immediately.
-	FHarness Jump({MakeNote(0, 60000.0)});
-	Jump.Sim.MoveShip(0);
-	Jump.Sim.ForceSpawnPowerup(EPowerupType::SlowMotion, 5);
-	Jump.AdvanceTo(7200.0);
-	Jump.Press(5, 7200.0);
-	EXPECT_TRUE(Jump.Sim.IsSlowMotionActive());
+	// Jumping in just after it arrives still catches it...
+	FHarness Late({MakeNote(0, 60000.0)});
+	Late.Sim.SpawnPowerup(EPowerupType::SlowMotion, 5, 3000.0);
+	Late.Move(5, 3100.0);
+	Late.AdvanceTo(3110.0);
+	EXPECT_TRUE(Late.Sim.IsSlowMotionActive());
+
+	// ...and so does passing through its lane inside the window.
+	FHarness Pass({MakeNote(0, 60000.0)});
+	Pass.Sim.SpawnPowerup(EPowerupType::Score2x, 5, 3000.0);
+	Pass.Move(5, 2700.0);
+	Pass.Move(4, 2800.0);
+	Pass.AdvanceTo(3300.0);
+	EXPECT_EQ(Pass.Sim.GetScore2xStacks(), 1);
+
+	// Spawned powerups start at the far end of the lane: one approach time away.
+	FHarness Spawn({MakeNote(0, 60000.0)});
+	Spawn.AdvanceTo(1000.0);
+	Spawn.Sim.ForceSpawnPowerup(EPowerupType::Fever, 1);
+	EXPECT_NEAR(Spawn.Sim.GetPowerups()[0].ArrivalMs, 3000.0, 1e-9);
 }
 
 AMP_TEST(PowerupsSpawnOnSchedule)
 {
 	FSimulation Sim;
 	Sim.Start({MakeNote(0, 600000.0)}, GetDefaultDifficultyParams(EDifficulty::Normal), FGameRules(), 0.0, 99);
-	Sim.MoveShip(0);
+	Sim.MoveShip(0, 0.0);
 	std::vector<FEvent> Events;
 	double Previous = -1.0;
 	double MinGap = 1e9;
@@ -555,9 +744,11 @@ AMP_TEST(SongCompletionBonusAndSummary)
 {
 	std::vector<FNote> Notes = LaneNotes(0, 1000.0, 500.0, 2);
 	Notes.push_back(MakeNote(3, 2000.0));
+	Notes.push_back(MakeNote(5, 2500.0));
 	FHarness H(Notes, EDifficulty::Normal, 5000.0);
-	H.Press(0, 1000.0);
-	H.Press(0, 1650.0); // Good
+	H.PressLane(0, 1000.0);
+	H.PressLane(0, 1650.0); // Good
+	H.Move(3, 1800.0);      // in front of the lane 3 gem, but never fires
 	H.AdvanceTo(4000.0);
 	EXPECT_FALSE(H.Sim.IsComplete());
 	H.AdvanceTo(5000.0);
@@ -570,6 +761,8 @@ AMP_TEST(SongCompletionBonusAndSummary)
 	EXPECT_EQ(Summary.Perfect, 1);
 	EXPECT_EQ(Summary.Good, 1);
 	EXPECT_EQ(Summary.Miss, 1);
+	EXPECT_EQ(Summary.Skipped, 1);
+	EXPECT_EQ(Summary.TotalNotes, 4);
 	EXPECT_NEAR(Summary.AccuracyPercent, 50.0, 1e-9);
 	EXPECT_EQ(Summary.BestLane, 0);
 	EXPECT_EQ(Summary.BestLaneCombo, 2);
@@ -582,7 +775,7 @@ AMP_TEST(AutoPlayAllHitsEverything)
 	std::vector<FNote> Notes;
 	for (int32_t Index = 0; Index < 30; ++Index)
 	{
-		Notes.push_back(MakeNote(Index % NumLanes, 500.0 + 150.0 * Index));
+		Notes.push_back(MakeNote(Index % NumLanes, 500.0 + 150.0 * Index, Index % NumColumns));
 	}
 	FHarness H(Notes);
 	H.Sim.SetAutoPlayAll(true);
@@ -590,6 +783,7 @@ AMP_TEST(AutoPlayAllHitsEverything)
 	EXPECT_TRUE(H.Sim.IsComplete());
 	EXPECT_EQ(H.Sim.GetStats().AutoHits, 30);
 	EXPECT_EQ(H.Sim.GetStats().Miss, 0);
+	EXPECT_EQ(H.Sim.GetStats().Skipped, 0);
 }
 
 AMP_TEST(DeterministicWithSameSeed)

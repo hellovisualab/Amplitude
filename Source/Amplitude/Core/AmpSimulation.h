@@ -29,7 +29,9 @@ namespace Amp
 		AutoCaptureFailed,
 		EnergyLow,
 		GameOver,
-		SongComplete
+		SongComplete,
+		/** A note crossed the hit line while the Beat Blaster was in another lane. */
+		NoteSkipped
 	};
 
 	/** Something that happened inside the simulation; the presentation layer turns these into sound and visuals. */
@@ -37,12 +39,15 @@ namespace Amp
 	{
 		EEventType Type = EEventType::NoteHit;
 		int32_t Lane = -1;
+		/** Gem column for note events and presses, -1 otherwise. */
+		int32_t Column = -1;
 		EJudgement Judgement = EJudgement::None;
 		EPowerupType Powerup = EPowerupType::Score2x;
+		/** Auto-played hit, or a ship move made by the game rather than the player. */
 		bool bAuto = false;
 		int32_t NoteIndex = -1;
 		int32_t PowerupId = -1;
-		/** Lane combo after a hit, consecutive misses after a miss, cleared notes, energy cost... */
+		/** Lane combo after a hit, consecutive misses after a miss, previous lane after a move, cleared notes... */
 		int32_t Count = 0;
 		int64_t Points = 0;
 		/** Total multiplier applied to a hit (combo x global). */
@@ -69,15 +74,19 @@ namespace Amp
 		int32_t MuteCount = 0;
 		int32_t Hits = 0;
 		int32_t Misses = 0;
+		int32_t Skipped = 0;
 		int32_t Captures = 0;
 	};
 
-	struct FFallingPowerup
+	/** A powerup gem riding down a lane; it is collected if the Beat Blaster is in that lane when it arrives. */
+	struct FTrackPowerup
 	{
 		int32_t Id = 0;
 		EPowerupType Type = EPowerupType::Score2x;
 		int32_t Lane = 0;
-		double AgeMs = 0.0;
+		double SpawnedAtMs = 0.0;
+		/** Song time at which it crosses the hit line. */
+		double ArrivalMs = 0.0;
 	};
 
 	/** Timers are in real (unpaused) milliseconds so Slow Motion does not stretch its own duration. */
@@ -97,6 +106,7 @@ namespace Amp
 		int32_t Perfect = 0;
 		int32_t Good = 0;
 		int32_t Miss = 0;
+		int32_t Skipped = 0;
 		int32_t AutoHits = 0;
 		int32_t GhostPresses = 0;
 		int32_t NotesCleared = 0;
@@ -112,6 +122,7 @@ namespace Amp
 		int32_t Perfect = 0;
 		int32_t Good = 0;
 		int32_t Miss = 0;
+		int32_t Skipped = 0;
 		int32_t AutoHits = 0;
 		int32_t NotesCleared = 0;
 		int32_t TotalNotes = 0;
@@ -131,19 +142,29 @@ namespace Amp
 	 * Deterministic rhythm-game simulation: hit detection, energy, per-lane combos, lane capture,
 	 * muting, powerups and scoring. It knows nothing about rendering, audio or wall-clock time;
 	 * the caller feeds it song time (driven by the audio clock) and real elapsed time.
+	 *
+	 * The Beat Blaster sits in one lane at a time and fires at one of three gem columns. Only notes
+	 * of the lane it occupies when they reach the hit line count against the player; the others
+	 * are skipped without penalty.
 	 */
 	class FSimulation
 	{
 	public:
 		void Start(std::vector<FNote> InNotes, const FDifficultyParams& InParams, const FGameRules& InRules, double InSongLengthMs, uint64_t Seed, double StartSongTimeMs = 0.0);
 
-		/** Lane key pressed: the Beat Blaster jumps to the lane and fires at its hit zone. */
-		void PressLane(int32_t Lane, double SongTimeMs);
+		/** Gem button pressed: fires at Column of the lane the Beat Blaster is in (or triggers an armed Lane Cleaner). */
+		void PressColumn(int32_t Column, double SongTimeMs);
 
-		/** Moves the Beat Blaster without firing. */
-		void MoveShip(int32_t Lane);
+		/** Moves the Beat Blaster one lane left (Direction < 0) or right (Direction > 0); it stops at the edges. */
+		void StepShip(int32_t Direction, double SongTimeMs);
 
-		/** Advances to SongTimeMs: auto-play, auto-miss, captures, powerups and song completion. */
+		/** Moves the Beat Blaster straight to a lane. */
+		void MoveShip(int32_t Lane, double SongTimeMs);
+
+		/** Jump to a lane and fire in one go (mouse / touch input and tests). */
+		void PressLane(int32_t Lane, int32_t Column, double SongTimeMs);
+
+		/** Advances to SongTimeMs: auto-play, misses, skips, captures, powerups and song completion. */
 		void Advance(double SongTimeMs, double RealDeltaMs);
 
 		/** Appends pending events to Out and clears the internal queue. */
@@ -152,14 +173,16 @@ namespace Amp
 		void SetPowerupSpawningEnabled(bool bEnabled) { bPowerupSpawning = bEnabled; }
 		/** Debug: every lane plays itself (useful to check chart/audio sync). */
 		void SetAutoPlayAll(bool bEnabled) { bAutoPlayAll = bEnabled; }
-		/** Debug/tests: drops a powerup into a lane immediately. */
+		/** Debug/tests: puts a powerup on a lane so it reaches the hit line at ArrivalMs. */
+		int32_t SpawnPowerup(EPowerupType Type, int32_t Lane, double ArrivalMs);
+		/** Debug/tests: puts a powerup at the far end of a lane (it arrives one approach time from now). */
 		int32_t ForceSpawnPowerup(EPowerupType Type, int32_t Lane);
 		/** Applies a powerup's effect as if it had just been collected (no collection points). */
 		void ApplyPowerup(EPowerupType Type);
 
 		const std::vector<FNote>& GetNotes() const { return Notes; }
 		const FLaneState& GetLane(int32_t Lane) const { return Lanes[static_cast<size_t>(Lane)]; }
-		const std::vector<FFallingPowerup>& GetPowerups() const { return Powerups; }
+		const std::vector<FTrackPowerup>& GetPowerups() const { return Powerups; }
 		const FActiveEffects& GetEffects() const { return Effects; }
 		const FRunStats& GetStats() const { return Stats; }
 		const FDifficultyParams& GetParams() const { return Params; }
@@ -168,6 +191,8 @@ namespace Amp
 		int64_t GetScore() const { return Score; }
 		int32_t GetEnergy() const { return Energy; }
 		int32_t GetShipLane() const { return ShipLane; }
+		/** Lane the Beat Blaster occupied at a (recent) song time. */
+		int32_t GetShipLaneAt(double SongTimeMs) const;
 		double GetSongTimeMs() const { return SongTimeMs; }
 		double GetSongLengthMs() const { return SongLengthMs; }
 		int32_t GetPendingNoteCount() const { return PendingNotes; }
@@ -188,30 +213,17 @@ namespace Amp
 		double GetGlobalMultiplier() const;
 		double GetLaneComboMultiplier(int32_t Lane) const;
 		double GetCaptureRemainingMs(int32_t Lane) const;
-		/** Normalised vertical position (0 = top, 1 = bottom) of a falling powerup. */
-		double GetPowerupY(const FFallingPowerup& Powerup) const;
+		/** Pending notes of a lane between two song times (used by the HUD mini-map and lane choices). */
+		int32_t CountPendingNotes(int32_t Lane, double FromMs, double ToMs) const;
 
 		FRunSummary Summarize() const;
 
 	private:
-		void Emit(const FEvent& Event) { Events.push_back(Event); }
-		void AdvanceCursor(FLaneState& Lane);
-		void ResolveHit(int32_t NoteIndex, EJudgement Judgement, double OffsetMs, double AtMs, bool bAuto);
-		void ResolveMiss(int32_t NoteIndex, double OffsetMs, double AtMs);
-		void AddEnergy(int32_t Delta);
-		bool TryCapture(int32_t Lane, double AtMs);
-		void ProcessDueNotes(double NowMs);
-		void UpdateCaptures(double NowMs);
-		void UpdateEffects(double RealDeltaMs);
-		void UpdatePowerups(double RealDeltaMs, double NowMs);
-		void CollectPowerupsAtShip();
-		void CollectPowerup(size_t Index);
-		void ScheduleNextPowerup();
-		void ClearLane(int32_t Lane, double AtMs);
-		int32_t PickLaneCleanerTarget() const;
-		int32_t PickAutoCaptureLane() const;
-		int32_t CountPendingNotes(int32_t Lane, double FromMs, double ToMs) const;
-		void CheckCompletion(double NowMs);
+		struct FShipMove
+		{
+			double TimeMs;
+			int32_t Lane;
+		};
 
 		struct FDueNote
 		{
@@ -220,11 +232,38 @@ namespace Amp
 			bool bAutoHit;
 		};
 
+		void Emit(const FEvent& Event) { Events.push_back(Event); }
+		void AdvanceCursor(FLaneState& Lane);
+		void SetShipLane(int32_t Lane, double AtMs, bool bAuto);
+		bool WasShipInLane(int32_t Lane, double FromMs, double ToMs) const;
+		void PruneShipHistory(double NowMs);
+		int32_t FindPressTarget(const FLaneState& Lane, int32_t Column, double AtMs, double WindowMs, bool bAnyColumn) const;
+		void EmitGhostPress(int32_t Column, double AtMs);
+		void ResolveHit(int32_t NoteIndex, EJudgement Judgement, double OffsetMs, double AtMs, bool bAuto);
+		void ResolveMiss(int32_t NoteIndex, double OffsetMs, double AtMs);
+		void ResolveSkip(int32_t NoteIndex, double AtMs);
+		void AddEnergy(int32_t Delta);
+		bool TryCapture(int32_t Lane, double AtMs);
+		void AdvanceShipAfterCapture(double AtMs);
+		void ProcessDueNotes(double NowMs);
+		void UpdateCaptures(double NowMs);
+		void UpdateEffects(double RealDeltaMs);
+		void UpdatePowerups(double NowMs);
+		void CollectPowerup(size_t Index, double AtMs);
+		void ScheduleNextPowerup();
+		int32_t PickPowerupLane();
+		void ClearLane(int32_t Lane, double AtMs);
+		int32_t PickLaneCleanerTarget() const;
+		int32_t PickAutoCaptureLane() const;
+		void CheckCompletion(double NowMs);
+
 		std::vector<FNote> Notes;
 		std::array<FLaneState, NumLanes> Lanes;
-		std::vector<FFallingPowerup> Powerups;
+		std::vector<FTrackPowerup> Powerups;
 		std::vector<FEvent> Events;
 		std::vector<FDueNote> DueScratch;
+		/** Where the ship was over the last few seconds, oldest first; never empty after Start. */
+		std::vector<FShipMove> ShipHistory;
 		FActiveEffects Effects;
 		FRunStats Stats;
 		FDifficultyParams Params;

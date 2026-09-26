@@ -14,6 +14,7 @@
 #include "AmplitudeDirector.generated.h"
 
 class AAmplitudePlayerController;
+class AAmplitudeStage;
 class SAmplitudeGameView;
 class SAmplitudeScreen;
 class SBox;
@@ -74,9 +75,11 @@ public:
 	void QuitToMainMenu();
 	void RescanSongs();
 
-	// Input from the player controller
-	void HandleLaneInput(int32 Lane, double PressedAtSeconds);
+	// Input from the player controller (Action is an AmplitudeControls::EAction)
+	void HandleActionInput(int32 Action, double PressedAtSeconds);
 	void HandlePauseInput();
+	/** Mouse / touch: jump to a lane. */
+	void HandleLaneJump(int32 Lane, double PressedAtSeconds);
 
 	// Settings
 	void ApplyAudioSettings();
@@ -94,6 +97,7 @@ public:
 	const FAmplitudeSongLibrary& GetSongLibrary() const { return SongLibrary; }
 	const FAmplitudeLeaderboard& GetLeaderboard() const { return Leaderboard; }
 	const FAmplitudeSession* GetSession() const { return Session.Get(); }
+	AAmplitudeStage* GetStage() const;
 	const FAmplitudeRunResult* GetLastResult() const { return LastResult.GetPtrOrNull(); }
 	int32 GetSelectedSongIndex() const { return SelectedSongIndex; }
 	TSharedPtr<const FAmplitudeSongDefinition> GetSelectedSong() const;
@@ -117,6 +121,9 @@ private:
 	void TickLoading();
 	void TickSession(double Now);
 	void FinishSession();
+	void ForwardSimEvent(const Amp::FEvent& Event);
+	/** Makes the stage camera the player's view (the controller would otherwise look through its pawn). */
+	void EnsureStageView();
 	AAmplitudePlayerController* GetAmplitudeController() const;
 
 	UPROPERTY(VisibleAnywhere, Category = "Amplitude")
@@ -124,6 +131,10 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Amplitude")
 	TObjectPtr<UAmplitudeSfxComponent> SfxPlayer;
+
+	/** The 3D presentation; the camera the player looks through lives on it. */
+	UPROPERTY(Transient)
+	TObjectPtr<AAmplitudeStage> Stage;
 
 	FAmplitudeSongLibrary SongLibrary;
 	FAmplitudeLeaderboard Leaderboard;

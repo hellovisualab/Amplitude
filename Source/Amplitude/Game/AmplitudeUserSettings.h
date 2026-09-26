@@ -26,13 +26,31 @@ enum class EAmplitudeControllerMode : uint8
 
 namespace AmplitudeControls
 {
-	/** Binding slots per lane: primary key, number-row alternate, second alternate, gamepad button. */
-	constexpr int32 NumSlots = 4;
-	constexpr int32 GamepadSlot = 3;
+	/** Everything the player can bind: steering the Beat Blaster, its three gem buttons and pause. */
+	enum EAction : int32
+	{
+		MoveLeft,
+		MoveRight,
+		GemLeft,
+		GemMiddle,
+		GemRight,
+		Pause,
+		NumActions
+	};
+
+	/** Binding slots per action: primary key, alternate key, gamepad button. */
+	constexpr int32 NumSlots = 3;
+	constexpr int32 GamepadSlot = 2;
+	/** Bumped whenever the default layout changes shape, so old saved profiles are replaced. */
+	constexpr int32 LayoutVersion = 2;
+
+	FText GetActionName(int32 Action);
+	/** The gem action for a note column (0-2). */
+	inline int32 GemAction(int32 Column) { return GemLeft + Column; }
 }
 
 USTRUCT()
-struct FAmplitudeLaneBinding
+struct FAmplitudeActionBinding
 {
 	GENERATED_BODY()
 
@@ -40,7 +58,7 @@ struct FAmplitudeLaneBinding
 	TArray<FKey> Keys;
 };
 
-/** A named set of key bindings (spec 8.4). Each lane (and pause) has AmplitudeControls::NumSlots slots. */
+/** A named set of key bindings (spec 8.4). Each action has AmplitudeControls::NumSlots slots. */
 USTRUCT()
 struct FAmplitudeControlProfile
 {
@@ -50,25 +68,22 @@ struct FAmplitudeControlProfile
 	FString Name;
 
 	UPROPERTY()
-	TArray<FAmplitudeLaneBinding> Lanes;
+	int32 Version = 0;
 
-	/** Same slot layout as a lane. */
+	/** Indexed by AmplitudeControls::EAction. */
 	UPROPERTY()
-	TArray<FKey> PauseKeys;
+	TArray<FAmplitudeActionBinding> Actions;
 
 	static FAmplitudeControlProfile MakeDefault();
 
-	/** Guarantees NumLanes lanes with NumSlots slots each (config files may be hand-edited). */
+	/** Guarantees NumActions actions with NumSlots slots each (config files may be hand-edited or out of date). */
 	void Sanitize();
-	FKey GetLaneKey(int32 Lane, int32 Slot) const;
-	void SetLaneKey(int32 Lane, int32 Slot, const FKey& Key);
-	FKey GetPauseKey(int32 Slot) const;
-	void SetPauseKey(int32 Slot, const FKey& Key);
-	/** Every valid key bound to the lane (all slots). */
-	TArray<FKey> GetLaneKeys(int32 Lane) const;
-	TArray<FKey> GetPauseKeys() const;
-	/** The key to show on screen for a lane: the gamepad slot or the primary keyboard key. */
-	FKey GetDisplayKey(int32 Lane, bool bGamepad) const;
+	FKey GetKey(int32 Action, int32 Slot) const;
+	void SetKey(int32 Action, int32 Slot, const FKey& Key);
+	/** Every valid key bound to the action (all slots). */
+	TArray<FKey> GetKeys(int32 Action) const;
+	/** The key to show on screen for an action: the gamepad slot or the primary keyboard key. */
+	FKey GetDisplayKey(int32 Action, bool bGamepad) const;
 };
 
 /** Every persistent option from the settings menu (spec 11.4), saved to GameUserSettings.ini. */

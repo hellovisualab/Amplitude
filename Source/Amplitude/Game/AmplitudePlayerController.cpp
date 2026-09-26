@@ -22,6 +22,8 @@ namespace
 AAmplitudePlayerController::AAmplitudePlayerController()
 {
 	bShowMouseCursor = true;
+	// The director points the camera at the 3D stage; possessing the placeholder pawn must not undo that.
+	bAutoManageActiveCameraTarget = false;
 }
 
 void AAmplitudePlayerController::BeginPlay()
@@ -48,17 +50,16 @@ void AAmplitudePlayerController::EndPlay(const EEndPlayReason::Type EndPlayReaso
 
 void AAmplitudePlayerController::CreateInputActions()
 {
-	if (LaneActions.Num() == Amp::NumLanes && PauseAction != nullptr)
+	if (Actions.Num() == AmplitudeControls::NumActions)
 	{
 		return;
 	}
-	LaneActions.Reset();
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
+	Actions.Reset();
+	for (int32 Action = 0; Action < AmplitudeControls::NumActions; ++Action)
 	{
 		// Boolean (digital) actions; Started fires once on each press.
-		LaneActions.Add(NewObject<UInputAction>(this));
+		Actions.Add(NewObject<UInputAction>(this));
 	}
-	PauseAction = NewObject<UInputAction>(this);
 }
 
 void AAmplitudePlayerController::SetupInputComponent()
@@ -74,14 +75,14 @@ void AAmplitudePlayerController::SetupInputComponent()
 	}
 
 	using FHandler = void (AAmplitudePlayerController::*)();
-	const FHandler Handlers[Amp::NumLanes] = {
-		&AAmplitudePlayerController::OnLane1, &AAmplitudePlayerController::OnLane2, &AAmplitudePlayerController::OnLane3,
-		&AAmplitudePlayerController::OnLane4, &AAmplitudePlayerController::OnLane5, &AAmplitudePlayerController::OnLane6};
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
+	const FHandler Handlers[AmplitudeControls::NumActions] = {
+		&AAmplitudePlayerController::OnMoveLeft, &AAmplitudePlayerController::OnMoveRight,
+		&AAmplitudePlayerController::OnGemLeft, &AAmplitudePlayerController::OnGemMiddle, &AAmplitudePlayerController::OnGemRight,
+		&AAmplitudePlayerController::OnPause};
+	for (int32 Action = 0; Action < AmplitudeControls::NumActions; ++Action)
 	{
-		EnhancedInput->BindAction(LaneActions[Lane], ETriggerEvent::Started, this, Handlers[Lane]);
+		EnhancedInput->BindAction(Actions[Action], ETriggerEvent::Started, this, Handlers[Action]);
 	}
-	EnhancedInput->BindAction(PauseAction, ETriggerEvent::Started, this, &AAmplitudePlayerController::OnPause);
 }
 
 void AAmplitudePlayerController::RebuildInputMappings()
@@ -98,17 +99,16 @@ void AAmplitudePlayerController::RebuildInputMappings()
 
 	const FAmplitudeControlProfile& Profile = Settings->GetActiveProfile();
 	UInputMappingContext* NewContext = NewObject<UInputMappingContext>(this);
-	for (int32 Lane = 0; Lane < Amp::NumLanes; ++Lane)
+	for (int32 Action = 0; Action < AmplitudeControls::NumActions; ++Action)
 	{
-		for (const FKey& Key : Profile.GetLaneKeys(Lane))
+		for (const FKey& Key : Profile.GetKeys(Action))
 		{
-			NewContext->MapKey(LaneActions[Lane], Key);
+			NewContext->MapKey(Actions[Action], Key);
 		}
 	}
-	for (const FKey& Key : Profile.GetPauseKeys())
-	{
-		NewContext->MapKey(PauseAction, Key);
-	}
+	// The left stick always steers as well, like the D-pad.
+	NewContext->MapKey(Actions[AmplitudeControls::MoveLeft], EKeys::Gamepad_LeftStick_Left);
+	NewContext->MapKey(Actions[AmplitudeControls::MoveRight], EKeys::Gamepad_LeftStick_Right);
 
 	if (MappingContext != nullptr)
 	{
@@ -134,7 +134,7 @@ void AAmplitudePlayerController::EnterGameplayMode()
 {
 	SetInputMode(FInputModeGameOnly());
 	SetShowMouseCursor(false);
-	// Keys still held from the menu (Enter/Space) must not register as lane presses.
+	// Keys still held from the menu (Enter/Space) must not register as gem presses.
 	FlushPressedKeys();
 }
 
@@ -143,7 +143,7 @@ bool AAmplitudePlayerController::IsUsingGamepad() const
 	return InputTracker.IsValid() && InputTracker->IsUsingGamepad();
 }
 
-void AAmplitudePlayerController::HandleLane(int32 Lane)
+void AAmplitudePlayerController::HandleAction(int32 Action)
 {
 	const double Now = FPlatformTime::Seconds();
 	double PressedAt = Now;
@@ -151,13 +151,47 @@ void AAmplitudePlayerController::HandleLane(int32 Lane)
 	{
 		if (const UAmplitudeUserSettings* Settings = UAmplitudeUserSettings::Get())
 		{
-			PressedAt = InputTracker->FindRecentPress(Settings->GetActiveProfile().GetLaneKeys(Lane), Now, PressTimestampWindowSeconds);
+			TArray<FKey> Keys = Settings->GetActiveProfile().GetKeys(Action);
+			if (Action == AmplitudeControls::MoveLeft)
+			{
+				Keys.Add(EKeys::Gamepad_LeftStick_Left);
+			}
+			else if (Action == AmplitudeControls::MoveRight)
+			{
+				Keys.Add(EKeys::Gamepad_LeftStick_Right);
+			}
+			PressedAt = InputTracker->FindRecentPress(Keys, Now, PressTimestampWindowSeconds);
 		}
 	}
 	if (AAmplitudeDirector* Director = GetDirector())
 	{
-		Director->HandleLaneInput(Lane, PressedAt);
+		Director->HandleActionInput(Action, PressedAt);
 	}
+}
+
+void AAmplitudePlayerController::OnMoveLeft()
+{
+	HandleAction(AmplitudeControls::MoveLeft);
+}
+
+void AAmplitudePlayerController::OnMoveRight()
+{
+	HandleAction(AmplitudeControls::MoveRight);
+}
+
+void AAmplitudePlayerController::OnGemLeft()
+{
+	HandleAction(AmplitudeControls::GemLeft);
+}
+
+void AAmplitudePlayerController::OnGemMiddle()
+{
+	HandleAction(AmplitudeControls::GemMiddle);
+}
+
+void AAmplitudePlayerController::OnGemRight()
+{
+	HandleAction(AmplitudeControls::GemRight);
 }
 
 void AAmplitudePlayerController::OnPause()
